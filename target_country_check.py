@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+target_vs_global_country_check.py
+
+1) Read COUNTRY_PATH from model.ini and load countries inside as target_country.
+2) From --standard (DVB/ATSC/ISDB), open root/country/<STANDARD>.ini as global_country.
+3) Check every target_country is included in global_country; fail if any missing.
+4) Print the comparison steps and append the result to an Excel report (format aligned with tv_multi_standard_validation.py),
+   with NO TvSysMap column.
+"""
+
 import argparse
 import os
 import re
-from typing import Dict, List, Tuple, Optional
-
+from typing import List, Tuple, Optional
 
 # -----------------------------
-# Utilities for report
+# Utilities for report (compatible style with tv_multi_standard_validation.py)
 # -----------------------------
 
 def _sheet_name_for_model(model_ini_path: str) -> str:
-    """
-    根據 model.ini 檔名的前綴決定頁簽：
-      - 前綴是數字 N → 'PID_N'
-      - 其他 → 'others'
-    例: '1_EU_XXX.ini' → 'PID_1'
-    """
     base = os.path.basename(model_ini_path or "")
     m = re.match(r"^(\d+)_", base)
     if m:
@@ -35,23 +38,22 @@ def _ensure_openpyxl():
         )
 
 
-def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 8) -> None:
+def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 8) -> None:
     """
     欄位：
       A: Result (PASS/FAIL)
-      B: condition_1 = Standard
-      C: condition_2 = TvSysMap = ...
-      D: condition_3 = Country Path = ...
-      E: condition_4 = Target Countries = ...
-      F: condition_5 = Missing = ...
-      G: condition_6 = Model.ini = ...
+      B: condition_1 → Standard
+      C: condition_2 → Country Path = ...
+      D: condition_3 → Target Countries = ...
+      E: condition_4 → Global Countries = ...
+      F: condition_5 → Missing = ...
+      G: condition_6 → Model.ini = ...
     無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment
+    from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
-    from openpyxl.styles import Font
 
     def _na(s: str) -> str:
         s = (s or "").strip()
@@ -75,24 +77,21 @@ def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condit
 
     # 取值（轉成 N/A）
     result   = "PASS" if res.get("passed", False) else "FAIL"
-    rules = f"COUNTRY_PATH exist?\ntvSysMap exist?"
-    standard = _na(res.get("standard", ""))
-    tvsysmap = _na(res.get("tv_sys_map", ""))
+    standard = res.get("standard", "")
     cpath    = _na(res.get("country_path", ""))
     targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
+    globals_ = _na(", ".join(res.get("global_countries", []) or []))
     missing  = _na(", ".join(res.get("missing", []) or []))
     modelini = _na(res.get("model_ini", ""))
 
-    # 各 condition 內容
-    c1 = rules
-    c2 = f"TvSysMap = {tvsysmap}"
-    c3 = f"Country Path = {cpath}"
-    c4 = standard
-    c5 = f"Target Countries = {targets}"
-    c6 = f"Missing = {missing}"
-    c7 = f"Model.ini = {modelini}"
-
-    conditions = [c1, c2, c3, c4, c5, c6, c7]
+    # 各 condition 內容（比照現有格式順序，以便和舊報表合併）
+    c1 = f"countries meet {standard}?"
+    c2 = f"Country Path = {cpath}"
+    c3 = f"Target Countries = {targets}"
+    c4 = f"Global Countries = {globals_}"
+    c5 = f"Missing = {missing}"
+    c6 = f"Model.ini = {modelini}"
+    conditions = [c1, c2, c3, c4, c5, c6]
     if len(conditions) < num_condition_cols:
         conditions += [""] * (num_condition_cols - len(conditions))
 
@@ -100,19 +99,18 @@ def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condit
     row = [result] + conditions[:num_condition_cols]
     ws.append(row)
 
+    # 第一列粗體
     bold_font = Font(bold=True)
-    for cell in ws['1']:  # 設定第一列粗體
+    for cell in ws['1']:
         cell.font = bold_font
 
-    # 欄寬
-    ws.column_dimensions["A"].width = 10   # Result
+    # 欄寬與對齊
     last_row_idx = ws.max_row
 
-    # 【新增】Result 欄 (A 欄) 也設為垂直靠上
+    # Result 垂直靠上
     ws.cell(row=last_row_idx, column=1).alignment = Alignment(vertical="top")
 
     # condition_* 欄位：寬、換行、垂直靠上
-    from openpyxl.utils import get_column_letter
     for col_idx in range(2, 2 + num_condition_cols):
         col_letter = get_column_letter(col_idx)
         ws.column_dimensions[col_letter].width = 80
@@ -120,7 +118,7 @@ def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condit
             wrap_text=True, vertical="top"
         )
 
-    # 移除預設空白 Sheet
+    # 移除預設空白 Sheet（若存在且非唯一）
     if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
         try:
             wb.remove(wb["Sheet"])
@@ -128,6 +126,7 @@ def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condit
             pass
 
     wb.save(xlsx_path)
+
 
 # -----------------------------
 # Core parsing / validation
@@ -172,38 +171,35 @@ def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
     return os.path.normpath(os.path.join(root, tvconfigs_like))
 
 
-def parse_model_ini_for_paths(model_ini_path: str, root: str) -> Tuple[Optional[str], Optional[str]]:
+def parse_model_ini_for_country_path(model_ini_path: str, root: str) -> Optional[str]:
     """
     從 model.ini 找：
-      - tvSysMap = "<path>"
-      - COUNTRY_PATH = "<path>"
-    回傳對應到檔案系統的絕對/相對實體路徑（已映射到 --root）
+      - COUNTRY_PATH = "<path>"（不分大小寫）
+    回傳對應到檔案系統的實際路徑（已映射到 --root）
     """
     txt = _read_text(model_ini_path)
-    tvsysmap = None
     country_path = None
 
-    # 找 tvSysMap 與 COUNTRY_PATH（忽略前置空白，允許有引號）
     for raw in txt.splitlines():
         line = _strip_comment(raw)
         if not line:
             continue
-        m1 = re.match(r'^\s*tvSysMap\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m1 and tvsysmap is None:
-            tvsysmap = _resolve_tvconfigs_path(root, m1.group(1).strip())
-            continue
-        m2 = re.match(r'^\s*COUNTRY_PATH\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m2 and country_path is None:
-            country_path = _resolve_tvconfigs_path(root, m2.group(1).strip())
+        m = re.match(r'^\s*COUNTRY_PATH\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
+        if not m:
+            m = re.match(r'^\s*country_path\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
+        if m and country_path is None:
+            country_path = _resolve_tvconfigs_path(root, m.group(1).strip())
             continue
 
-    return tvsysmap, country_path
+    return country_path
 
 
 def parse_country_list(country_ini_path: str) -> List[str]:
     """
-    嘗試從 COUNTRY_PATH 指到的 ini 取出國家清單。
-    設計成「寬鬆解析」：過濾註解與空白，將可能的國家 token（A-Z/_，逗號分隔）擷取出來。
+    寬鬆解析國家清單：
+      - 過濾註解與空白
+      - 以逗號、等號、空白拆字
+      - 抽取看起來像國家 token（大寫、數字、底線）
     """
     if not country_ini_path or not os.path.exists(country_ini_path):
         return []
@@ -215,10 +211,8 @@ def parse_country_list(country_ini_path: str) -> List[str]:
         line = _strip_comment(raw)
         if not line:
             continue
-        # 用逗號、空白、等號都拆開試試
         for part in re.split(r"[,\s=]+", line):
             part = part.strip()
-            # 篩選看起來像國家名稱的 token（大寫＋底線）
             if part and re.fullmatch(r"[A-Z][A-Z0-9_]*", part):
                 tokens.append(part)
 
@@ -232,44 +226,14 @@ def parse_country_list(country_ini_path: str) -> List[str]:
     return uniq
 
 
-def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Optional[str], targets: List[str]) -> Dict:
-    """
-    產生報表所需的結果結構（你原本的檢查可改寫這裡填滿更多欄位）
-    """
-    missing: List[str] = []
-    if tvsysmap and not os.path.exists(tvsysmap):
-        missing.append(tvsysmap)
-    if country_path and not os.path.exists(country_path):
-        missing.append(country_path)
-
-    passed = (tvsysmap and os.path.exists(tvsysmap)) and (country_path and os.path.exists(country_path))
-
-    return {
-        "standard": args.standard or "",
-        "passed": bool(passed),
-        "model_ini": model_ini,
-        "tv_sys_map": tvsysmap or "",
-        "country_path": country_path or "",
-        "customer_target_countries": targets,
-        "missing": missing,
-    }
-
-
-# -----------------------------
-# Main
-# -----------------------------
-
 def main():
-    parser = argparse.ArgumentParser(description="TV multi-standard validation with Excel report (kipling.xlsx).")
+    parser = argparse.ArgumentParser(description="Compare target COUNTRY_PATH countries vs global <STANDARD>.ini and export to Excel.")
     parser.add_argument("--model-ini", required=True, help="path to model ini (e.g., model/1_xxx.ini)")
     parser.add_argument("--root", required=True, help="tvconfigs project root (maps /tvconfigs/* to here)")
-    parser.add_argument("--standard", choices=["DVB", "ATSC", "ISDB"], default=None, help="target standard")
-    parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
-
-    # 報表參數：--report 與 --report-xlsx（任一存在即輸出；未指定路徑則用 kipling.xlsx）
+    parser.add_argument("--standard", required=True, choices=["DVB", "ATSC", "ISDB"], help="target standard to open country/<STANDARD>.ini")
     parser.add_argument("--report", action="store_true", help="export report to xlsx (default: kipling.xlsx)")
     parser.add_argument("--report-xlsx", metavar="FILE", help="export report to specific xlsx file")
-
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
     args = parser.parse_args()
 
     model_ini = args.model_ini
@@ -281,30 +245,62 @@ def main():
     if args.verbose:
         print(f"[INFO] model_ini: {model_ini}")
         print(f"[INFO] root     : {root}")
-        print(f"[INFO] standard : {args.standard or ''}")
+        print(f"[INFO] standard : {args.standard}")
 
-    # 解析 model.ini -> tvSysMap 與 COUNTRY_PATH
-    tvsysmap_path, country_path = parse_model_ini_for_paths(model_ini, root)
+    # 1) 解析 model.ini → COUNTRY_PATH
+    country_path = parse_model_ini_for_country_path(model_ini, root)
     if args.verbose:
-        print(f"[INFO] tvSysMap     : {tvsysmap_path or '(not found in model.ini)'}")
         print(f"[INFO] COUNTRY_PATH : {country_path or '(not found in model.ini)'}")
 
-    # 擷取國家清單（寬鬆解析）
-    targets = parse_country_list(country_path) if country_path else []
+    # 2) target_country from COUNTRY_PATH
+    target_countries = parse_country_list(country_path) if country_path else []
     if args.verbose:
-        print(f"[INFO] Target Countries: {', '.join(targets) if targets else '(none)'}")
+        print(f"[INFO] Target Countries ({len(target_countries)}): {', '.join(target_countries) if target_countries else '(none)'}")
 
-    # 產生結果
-    res = build_result(args, model_ini, tvsysmap_path, country_path, targets)
+    # 3) global_country from root/country/<STANDARD>.ini
+    global_ini = os.path.join(root, "country", f"{args.standard}.ini")
+    global_countries = parse_country_list(global_ini)
+    if args.verbose:
+        print(f"[INFO] Global Countries [{args.standard}] ({len(global_countries)}): {', '.join(global_countries) if global_countries else '(none)'}")
+        if not os.path.exists(global_ini):
+            print(f"[WARN] Global ini not found: {global_ini}")
 
-    # 簡單輸出到 console
-    print(f"Standard: {res['standard']}")
-    print(f"Result  : {'PASS' if res['passed'] else 'FAIL'}")
+    # 4) 比對：target 是否全部包含於 global
+    global_set = set(global_countries)
+    missing = [c for c in target_countries if c not in global_set]
+    passed = (len(missing) == 0) and bool(target_countries or global_countries)
+
+    # 印出比對過程
+    print("=== Comparison ===")
+    print(f"COUNTRY_PATH: {country_path or 'N/A'}")
+    print(f"Global ini  : {global_ini if os.path.exists(global_ini) else (global_ini + ' (NOT FOUND)')}")
+    print(f"Target -> {len(target_countries)} country tokens")
+    print(f"Global -> {len(global_countries)} country tokens")
+    if missing:
+        print(f"[FAIL] Missing (target not in global): {', '.join(missing)}")
+    else:
+        print("[PASS] All target countries are present in global list.")
+
+    # 準備報表資料（沿用欄位語意，無 TvSysMap 欄位）
+    res = {
+        "standard": args.standard,
+        "passed": bool(passed),
+        "model_ini": model_ini,
+        "country_path": country_path or "",
+        "customer_target_countries": target_countries,
+        "global_countries": global_countries,
+        "missing": missing,
+    }
+
+    # 輸出簡單總結
+    print("------------------")
+    print(f"Standard: {args.standard}")
+    print(f"Result  : {'PASS' if passed else 'FAIL'}")
 
     # 報表輸出
     if args.report or args.report_xlsx:
         xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
-        export_report_kipling(res, xlsx_path=xlsx_path)
+        export_report(res, xlsx_path=xlsx_path)
         sheet = _sheet_name_for_model(model_ini)
         print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet})")
 
