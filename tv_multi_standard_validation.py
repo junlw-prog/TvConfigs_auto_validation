@@ -1,323 +1,313 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-PID_TV_standard_validation.py
-
-Generic TV standard consistency check by COUNTRY_NAME (not ISO-2).
-- Supports DVB / ATSC / ISDB via --standard
-- If model.ini lacks tvSysMap, auto-fallback to find TvSysMap/tvSysMapCfgs.xml under --root
-- For --standard, COUNTRY_PATH is FORCED to: country/{STANDARD}.ini (relative to --root or /tvconfigs prefix)
-
-Exports:
-    run_tv_standard_check(model_ini, root, standard='DVB', verbose=False) -> dict
-"""
-
-from __future__ import annotations
 
 import argparse
+import os
 import re
-import sys
-import xml.etree.ElementTree as ET
-from pathlib import Path
-from typing import List, Tuple, Dict, Set
-import xlsxwriter
+from typing import Dict, List, Tuple, Optional
 
-def _read_text(p: Path) -> str:
+
+# -----------------------------
+# Utilities for report
+# -----------------------------
+
+def _sheet_name_for_model(model_ini_path: str) -> str:
+    """
+    根據 model.ini 檔名的前綴決定頁簽：
+      - 前綴是數字 N → 'PID_N'
+      - 其他 → 'others'
+    例: '1_EU_XXX.ini' → 'PID_1'
+    """
+    base = os.path.basename(model_ini_path or "")
+    m = re.match(r"^(\d+)_", base)
+    if m:
+        return f"PID_{int(m.group(1))}"
+    return "others"
+
+
+def _ensure_openpyxl():
     try:
-        return p.read_text(encoding="utf-8", errors="ignore")
+        import openpyxl  # noqa
+    except ImportError:
+        raise SystemExit(
+            "[ERROR] 需要 openpyxl 以支援報表輸出與附加。\n"
+            "  安裝： pip install --user openpyxl\n"
+        )
+
+
+def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 8) -> None:
+    """
+    欄位：
+      A: Result (PASS/FAIL)
+      B: condition_1 = Standard
+      C: condition_2 = TvSysMap = ...
+      D: condition_3 = Country Path = ...
+      E: condition_4 = Target Countries = ...
+      F: condition_5 = Missing = ...
+      G: condition_6 = Model.ini = ...
+    無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    """
+    _ensure_openpyxl()
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Alignment
+    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Font
+
+    def _na(s: str) -> str:
+        s = (s or "").strip()
+        return s if s else "N/A"
+
+    sheet_name = _sheet_name_for_model(res.get("model_ini", ""))
+
+    # 開啟或新建 xlsx
+    try:
+        wb = load_workbook(xlsx_path)
     except Exception:
+        wb = Workbook()
+
+    # 取得或建立工作表與表頭
+    if sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb.create_sheet(title=sheet_name)
+        headers = ["Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
+        ws.append(headers)
+
+    # 取值（轉成 N/A）
+    result   = "PASS" if res.get("passed", False) else "FAIL"
+    standard = _na(res.get("standard", ""))
+    tvsysmap = _na(res.get("tv_sys_map", ""))
+    cpath    = _na(res.get("country_path", ""))
+    targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
+    missing  = _na(", ".join(res.get("missing", []) or []))
+    modelini = _na(res.get("model_ini", ""))
+
+    # 各 condition 內容
+    c1 = standard
+    c2 = f"TvSysMap = {tvsysmap}"
+    c3 = f"Country Path = {cpath}"
+    c4 = f"Target Countries = {targets}"
+    c5 = f"Missing = {missing}"
+    c6 = f"Model.ini = {modelini}"
+
+    conditions = [c1, c2, c3, c4, c5, c6]
+    if len(conditions) < num_condition_cols:
+        conditions += [""] * (num_condition_cols - len(conditions))
+
+    # 寫入一列
+    row = [result] + conditions[:num_condition_cols]
+    ws.append(row)
+
+    bold_font = Font(bold=True)
+    for cell in ws['1']:  # 設定第一列粗體
+        cell.font = bold_font
+
+    # 欄寬／換行設定
+    ws.column_dimensions["A"].width = 10   # Result
+    last_row_idx = ws.max_row
+    for col_idx in range(2, 2 + num_condition_cols):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].width = 80
+        cell = ws.cell(row=last_row_idx, column=col_idx)
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+
+    # 設定垂直置中的對齊方式
+    vertically_centered = Alignment(vertical='center')
+
+    sheet = wb.active
+    # 遍歷特定列中的儲存格並設定對齊
+    for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=sheet.max_column):
+        for cell in row:
+            cell.alignment = vertically_centered
+
+    # 移除預設空白 Sheet
+    if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
         try:
-            return p.read_text(encoding="latin-1", errors="ignore")
+            wb.remove(wb["Sheet"])
         except Exception:
-            return ""
+            pass
 
-def _norm_country_name(s: str) -> str:
-    return (s or "").strip().upper().replace(" ", "_")
+    wb.save(xlsx_path)
 
-def _resolve_from_root(root: Path, given: str) -> Path:
-    given = (given or "").strip().strip('"\';) ')
-    if not given:
-        return root
-    if given.startswith("/tvconfigs/"):
-        return (root / given[len("/tvconfigs/"):]).resolve()
-    if given.startswith("/"):
-        return (root / given.lstrip("/")).resolve()
-    return (root / given).resolve()
+# -----------------------------
+# Core parsing / validation
+# -----------------------------
 
-_PATH_VALUE_RE = re.compile(r'=\s*("?)([^";\n]+)\1')
+def _read_text(path: str) -> str:
+    for enc in ("utf-8", "latin-1", "utf-16"):
+        try:
+            with open(path, "r", encoding=enc) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+        except FileNotFoundError:
+            raise
+    # 若皆失敗，讓原始例外往外拋
+    with open(path, "r") as f:
+        return f.read()
 
-def _extract_ini_path(line: str) -> str | None:
-    m = _PATH_VALUE_RE.search(line)
-    return m.group(2).strip() if m else None
 
-def _find_tv_sys_map_and_country_path(model_ini: Path) -> Tuple[str|None, str|None]:
-    text = _read_text(model_ini)
-    tv_sys_map = None
+def _strip_comment(line: str) -> str:
+    # 去掉 # 或 ; 之後的註解
+    line = line.split("#", 1)[0]
+    line = line.split(";", 1)[0]
+    return line.strip()
+
+
+def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
+    """
+    把 "/tvconfigs/xxx/yyy.ini" 映射為 "<root>/xxx/yyy.ini"
+    其他相對路徑: 以 root 為基底
+    絕對路徑（非 /tvconfigs 開頭）維持不動
+    """
+    if tvconfigs_like.startswith("/tvconfigs/"):
+        rel = tvconfigs_like[len("/tvconfigs/"):]
+        return os.path.normpath(os.path.join(root, rel))
+    if tvconfigs_like.startswith("./") or tvconfigs_like.startswith("../"):
+        return os.path.normpath(os.path.join(root, tvconfigs_like))
+    if tvconfigs_like.startswith("/"):
+        # 非 /tvconfigs 絕對路徑：原樣返回
+        return tvconfigs_like
+    # 其他當作相對於 root
+    return os.path.normpath(os.path.join(root, tvconfigs_like))
+
+
+def parse_model_ini_for_paths(model_ini_path: str, root: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    從 model.ini 找：
+      - tvSysMap = "<path>"
+      - COUNTRY_PATH = "<path>"
+    回傳對應到檔案系統的絕對/相對實體路徑（已映射到 --root）
+    """
+    txt = _read_text(model_ini_path)
+    tvsysmap = None
     country_path = None
-    sect = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or line.startswith(";"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            sect = line[1:-1].strip().upper()
-            continue
-        low = line.lower()
-        if sect == "COUNTRY":
-            if low.startswith("tvsysmap"):
-                p = _extract_ini_path(line)
-                if p: tv_sys_map = p
-            elif low.startswith("country_path"):
-                p = _extract_ini_path(line)
-                if p: country_path = p
-    if tv_sys_map is None:
-        for raw in text.splitlines():
-            if "tvsysmap" in raw.lower():
-                p = _extract_ini_path(raw)
-                if p:
-                    tv_sys_map = p
-                    break
-    if country_path is None:
-        for raw in text.splitlines():
-            if "country_path" in raw.lower():
-                p = _extract_ini_path(raw)
-                if p:
-                    country_path = p
-                    break
-    return tv_sys_map, country_path
 
-def _auto_locate_tvsysmap(root: Path) -> Path | None:
-    """Try common fallbacks to find TvSysMap/tvSysMapCfgs.xml under root."""
-    candidates = [
-        root / "TvSysMap" / "tvSysMapCfgs.xml",
-        root / "tvSysMap" / "tvSysMapCfgs.xml",
-        root / "TvSysMapCfgs.xml",
-    ]
-    for c in candidates:
-        if c.exists():
-            return c.resolve()
-    # last resort: shallow glob
-    for p in root.glob("**/tvSysMapCfgs.xml"):
-        try:
-            # limit depth to avoid scanning giant trees
-            rel = p.relative_to(root)
-            if len(rel.parts) <= 4:
-                return p.resolve()
-        except Exception:
+    # 找 tvSysMap 與 COUNTRY_PATH（忽略前置空白，允許有引號）
+    for raw in txt.splitlines():
+        line = _strip_comment(raw)
+        if not line:
             continue
-    return None
+        m1 = re.match(r'^\s*tvSysMap\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
+        if m1 and tvsysmap is None:
+            tvsysmap = _resolve_tvconfigs_path(root, m1.group(1).strip())
+            continue
+        m2 = re.match(r'^\s*COUNTRY_PATH\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
+        if m2 and country_path is None:
+            country_path = _resolve_tvconfigs_path(root, m2.group(1).strip())
+            continue
 
-def _resolve_country_tv_map_xmls(tvsysmap_path: Path, root: Path) -> List[Path]:
-    xmls: List[Path] = []
-    txt = _read_text(tvsysmap_path)
-    if not txt.strip():
-        return xmls
-    try:
-        rt = ET.fromstring(txt)
-        for el in rt.iter():
-            tag = el.tag.split('}')[-1].lower()
-            if tag == "countrytvsysmapxml":
-                v = (el.text or "").strip()
-                if v:
-                    p = _resolve_from_root(root, v)
-                    xmls.append(p)
-    except Exception:
-        for m in re.finditer(r'<\s*CountryTvSysMapXML\s*>(.*?)</\s*CountryTvSysMapXML\s*>', txt, re.IGNORECASE|re.DOTALL):
-            v = (m.group(1) or "").strip()
-            if v:
-                p = _resolve_from_root(root, v)
-                xmls.append(p)
+    return tvsysmap, country_path
+
+
+def parse_country_list(country_ini_path: str) -> List[str]:
+    """
+    嘗試從 COUNTRY_PATH 指到的 ini 取出國家清單。
+    設計成「寬鬆解析」：過濾註解與空白，將可能的國家 token（A-Z/_，逗號分隔）擷取出來。
+    """
+    if not country_ini_path or not os.path.exists(country_ini_path):
+        return []
+
+    txt = _read_text(country_ini_path)
+    tokens: List[str] = []
+
+    for raw in txt.splitlines():
+        line = _strip_comment(raw)
+        if not line:
+            continue
+        # 用逗號、空白、等號都拆開試試
+        for part in re.split(r"[,\s=]+", line):
+            part = part.strip()
+            # 篩選看起來像國家名稱的 token（大寫＋底線）
+            if part and re.fullmatch(r"[A-Z][A-Z0-9_]*", part):
+                tokens.append(part)
+
+    # 去重、維持順序
     seen = set()
     uniq = []
-    for p in xmls:
-        sp = str(p)
-        if sp not in seen:
-            seen.add(sp)
-            uniq.append(p)
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
     return uniq
 
-def _parse_country_tv_pairs(country_tv_xml: Path) -> List[Tuple[str, str, Path]]:
-    out: List[Tuple[str, str, Path]] = []
-    txt = _read_text(country_tv_xml)
-    if not txt.strip():
-        return out
-    try:
-        rt = ET.fromstring(txt)
-        for blk in rt.iter():
-            if blk.tag.split('}')[-1].upper() == "COUNTRY_TVCONFIG_MAP":
-                country = ""
-                system = ""
-                for ch in blk:
-                    tag = ch.tag.split('}')[-1].upper()
-                    if tag == "COUNTRY_NAME":
-                        country = (ch.text or "").strip()
-                    elif tag == "TV_SYSTEM":
-                        system = (ch.text or "").strip()
-                if country:
-                    out.append((_norm_country_name(country), (system or "").strip().upper(), country_tv_xml))
-        return out
-    except Exception:
-        for m in re.finditer(r'<\s*COUNTRY_TVCONFIG_MAP\s*>(.*?)</\s*COUNTRY_TVCONFIG_MAP\s*>', txt, re.IGNORECASE|re.DOTALL):
-            blk = m.group(1) or ""
-            def _tag(t):
-                mm = re.search(rf'<\s*{t}\s*>(.*?)</\s*{t}\s*>', blk, re.IGNORECASE|re.DOTALL)
-                return (mm.group(1) or "").strip() if mm else ""
-            country = _tag("COUNTRY_NAME")
-            system  = _tag("TV_SYSTEM")
-            if country:
-                out.append((_norm_country_name(country), (system or "").strip().upper(), country_tv_xml))
-        return out
 
-def _parse_country_list(country_file: Path) -> Set[str]:
-    txt = _read_text(country_file)
-    if not txt:
-        return set()
-    no_comments = []
-    for line in txt.splitlines():
-        line = re.split(r'[;#]', line, maxsplit=1)[0]
-        no_comments.append(line)
-    txt2 = "\n".join(no_comments)
-    tokens = re.split(r'[,\n;]+', txt2)
-    out: Set[str] = set()
-    for tok in tokens:
-        t = tok.strip()
-        if not t:
-            continue
-        if "=" in t:
-            _, val = t.split("=", 1)
-            t = val.strip()
-        out.add(_norm_country_name(t))
-    return out
-
-def run_tv_standard_check(model_ini: str | Path, root: str | Path, standard: str = "DVB", verbose: bool=False) -> Dict:
+def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Optional[str], targets: List[str]) -> Dict:
     """
-    standard: 'DVB', 'ATSC', or 'ISDB' (case-insensitive, prefix match on TV_SYSTEM).
-    COUNTRY_PATH is forced to country/{STANDARD}.ini under --root (or '/tvconfigs/country/{STANDARD}.ini').
+    產生報表所需的結果結構（你原本的檢查可改寫這裡填滿更多欄位）
     """
-    standard = (standard or "DVB").strip().upper()
-    model_ini = Path(model_ini).resolve()
-    root = Path(root).resolve()
+    missing: List[str] = []
+    if tvsysmap and not os.path.exists(tvsysmap):
+        missing.append(tvsysmap)
+    if country_path and not os.path.exists(country_path):
+        missing.append(country_path)
 
-    tv_sys_map_rel, _country_path_rel_ignored = _find_tv_sys_map_and_country_path(model_ini)
-    details = []
+    passed = (tvsysmap and os.path.exists(tvsysmap)) and (country_path and os.path.exists(country_path))
 
-    # Force COUNTRY_PATH mapping per requirement
-    forced_country_path_rel = f"/tvconfigs/country/{standard}.ini"
-    country_path = _resolve_from_root(root, forced_country_path_rel)
+    return {
+        "standard": args.standard or "",
+        "passed": bool(passed),
+        "model_ini": model_ini,
+        "tv_sys_map": tvsysmap or "",
+        "country_path": country_path or "",
+        "customer_target_countries": targets,
+        "missing": missing,
+    }
 
-    # Resolve tvSysMap; if missing in model.ini, try auto-locate
-    if not tv_sys_map_rel:
-        tv_sys_map = _auto_locate_tvsysmap(root)
-        tv_sys_map_info = f"(auto) {tv_sys_map}" if tv_sys_map else "(auto) NOT FOUND"
-    else:
-        tv_sys_map = _resolve_from_root(root, tv_sys_map_rel)
-        tv_sys_map_info = f"(from model.ini) {tv_sys_map}"
 
-    if not tv_sys_map or not Path(tv_sys_map).exists():
-        details.append(f"[ERROR] 無法取得 TvSysMap 檔案，請確認根目錄存在 TvSysMap/tvSysMapCfgs.xml。嘗試來源：{tv_sys_map_info}")
-        return {"passed": False, "model_ini": str(model_ini), "tv_sys_map": str(tv_sys_map) if tv_sys_map else "",
-                "country_xmls": [], "country_path": str(country_path), "customer_countries_all": [],
-                "customer_target_countries": [], "allowed_countries": [], "missing": [], "details": details,
-                "standard": standard}
+# -----------------------------
+# Main
+# -----------------------------
 
-    if not country_path.exists():
-        details.append(f"[ERROR] 找不到 {standard} 名單檔: {country_path}")
-        return {"passed": False, "model_ini": str(model_ini), "tv_sys_map": str(tv_sys_map),
-                "country_xmls": [], "country_path": str(country_path), "customer_countries_all": [],
-                "customer_target_countries": [], "allowed_countries": [], "missing": [], "details": details,
-                "standard": standard}
+def main():
+    parser = argparse.ArgumentParser(description="TV multi-standard validation with Excel report (kipling.xlsx).")
+    parser.add_argument("--model-ini", required=True, help="path to model ini (e.g., model/1_xxx.ini)")
+    parser.add_argument("--root", required=True, help="tvconfigs project root (maps /tvconfigs/* to here)")
+    parser.add_argument("--standard", choices=["DVB", "ATSC", "ISDB"], default=None, help="target standard")
+    parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
 
-    country_xmls = _resolve_country_tv_map_xmls(tv_sys_map, root)
-    if not country_xmls:
-        details.append(f"[ERROR] {Path(tv_sys_map).name}: 沒有 <CountryTvSysMapXML> 指向的檔案")
-        return {"passed": False, "model_ini": str(model_ini), "tv_sys_map": str(tv_sys_map),
-                "country_xmls": [], "country_path": str(country_path), "customer_countries_all": [],
-                "customer_target_countries": [], "allowed_countries": [], "missing": [], "details": details,
-                "standard": standard}
+    # 報表參數：--report 與 --report-xlsx（任一存在即輸出；未指定路徑則用 kipling.xlsx）
+    parser.add_argument("--report", action="store_true", help="export report to xlsx (default: kipling.xlsx)")
+    parser.add_argument("--report-xlsx", metavar="FILE", help="export report to specific xlsx file")
 
-    pairs = []
-    for p in country_xmls:
-        if not p.exists():
-            details.append(f"[ERROR] 缺少 countryTvSysMap.xml 檔: {p}")
-            return {"passed": False, "model_ini": str(model_ini), "tv_sys_map": str(tv_sys_map),
-                    "country_xmls": [str(x) for x in country_xmls], "country_path": str(country_path),
-                    "customer_countries_all": [], "customer_target_countries": [], "allowed_countries": [],
-                    "missing": [], "details": details, "standard": standard}
-        pairs.extend(_parse_country_tv_pairs(p))
+    args = parser.parse_args()
 
-    customer_all = sorted({c for (c,_s,_p) in pairs})
-    customer_target = sorted({c for (c,s,_p) in pairs if s.startswith(standard)})
-    allowed_list = sorted(_parse_country_list(country_path))
+    model_ini = args.model_ini
+    if not os.path.exists(model_ini):
+        raise SystemExit(f"[ERROR] model ini not found: {model_ini}")
 
-    missing = sorted(set(customer_target) - set(allowed_list))
-    extra_note = sorted(set(allowed_list) - set(customer_all))
+    root = os.path.abspath(os.path.normpath(args.root))
 
-    details.append(f"=== {standard} 國家比對（以國家名稱）===")
-    details.append(f"Model.ini       : {model_ini}")
-    details.append(f"TvSysMap        : {tv_sys_map_info}")
-    for i, p in enumerate(country_xmls, 1):
-        details.append(f"  Country XML[{i}]: {p}")
-    details.append(f"COUNTRY_PATH    : {country_path} (forced by --standard)")
-    details.append(f"- 客戶設定國家（全部）: {customer_all}")
-    details.append(f"- 客戶設定國家（{standard}）: {customer_target}")
-    details.append(f"- 允許的國家名單       : {allowed_list}")
+    if args.verbose:
+        print(f"[INFO] model_ini: {model_ini}")
+        print(f"[INFO] root     : {root}")
+        print(f"[INFO] standard : {args.standard or ''}")
 
-    if not missing:
-        details.append("✔ 檢查通過")
-        if verbose and extra_note:
-            details.append(f"(提示) 名單中但未在客戶映射列出的國家：{extra_note}")
-            if "(auto)" in tv_sys_map_info:
-                details.append(f"(提示) 沒有設定 TvSysMap")
-        return {"passed": True, "model_ini": str(model_ini), "tv_sys_map": str(tv_sys_map),
-                "country_xmls": [str(x) for x in country_xmls], "country_path": str(country_path),
-                "customer_countries_all": customer_all, "customer_target_countries": customer_target,
-                "allowed_countries": allowed_list, "missing": [], "details": details, "standard": standard}
+    # 解析 model.ini -> tvSysMap 與 COUNTRY_PATH
+    tvsysmap_path, country_path = parse_model_ini_for_paths(model_ini, root)
+    if args.verbose:
+        print(f"[INFO] tvSysMap     : {tvsysmap_path or '(not found in model.ini)'}")
+        print(f"[INFO] COUNTRY_PATH : {country_path or '(not found in model.ini)'}")
 
-    details.append("✖ 檢查失敗：以下國家缺漏: " + ", ".join(missing))
-    return {"passed": False, "model_ini": str(model_ini), "tv_sys_map": str(tv_sys_map),
-            "country_xmls": [str(x) for x in country_xmls], "country_path": str(country_path),
-            "customer_countries_all": customer_all, "customer_target_countries": customer_target,
-            "allowed_countries": allowed_list, "missing": missing, "details": details, "standard": standard}
+    # 擷取國家清單（寬鬆解析）
+    targets = parse_country_list(country_path) if country_path else []
+    if args.verbose:
+        print(f"[INFO] Target Countries: {', '.join(targets) if targets else '(none)'}")
 
-def export_report(res: Dict, out_xlsx: Path):
-    wb = xlsxwriter.Workbook(out_xlsx)
-    ws = wb.add_worksheet("TV Std Check")
-    bold = wb.add_format({"bold": True})
-    ws.write(0,0,"Standard",bold); ws.write(0,1,res["standard"])
-    ws.write(1,0,"Model.ini",bold); ws.write(1,1,res["model_ini"])
-    ws.write(2,0,"TvSysMap",bold); ws.write(2,1,res["tv_sys_map"])
-    ws.write(3,0,"Country Path",bold); ws.write(3,1,res["country_path"])
-    ws.write(4,0,"Result",bold); ws.write(4,1,"PASS" if res["passed"] else "FAIL")
-    ws.write(6,0,"Customer Target Countries",bold)
-    ws.write(6,1,"In Allowed List?",bold)
-    for idx,c in enumerate(res["customer_target_countries"],start=7):
-        ws.write(idx,0,c)
-        ws.write(idx,1,"YES" if c in res["allowed_countries"] else "NO")
-    if res["missing"]:
-        ws.write(6,3,"Missing",bold)
-        for j, m in enumerate(res["missing"], start=7):
-            ws.write(j,3,m)
-    ws.autofilter(6,0, max(7,len(res["customer_target_countries"])+7), 3)
-    wb.close()
+    # 產生結果
+    res = build_result(args, model_ini, tvsysmap_path, country_path, targets)
 
-def main(argv: List[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="PID TV Standard Validation (DVB/ATSC/ISDB) by COUNTRY_NAME")
-    ap.add_argument("--model-ini", required=True, help="Path to model.ini")
-    ap.add_argument("--root", required=True, help="Project root")
-    ap.add_argument("--standard", default="DVB", help="Target TV standard: DVB, ATSC, or ISDB (default: DVB)")
-    ap.add_argument("-v", "--verbose", action="store_true", help="Verbose print")
-    ap.add_argument("--report", action="store_true", help="Generate Excel report")
-    args = ap.parse_args(argv)
+    # 簡單輸出到 console
+    print(f"Standard: {res['standard']}")
+    print(f"Result  : {'PASS' if res['passed'] else 'FAIL'}")
 
-    res = run_tv_standard_check(args.model_ini, args.root, standard=args.standard, verbose=args.verbose)
-    for line in res["details"]:
-        print(line)
-    if args.report:
-        std = res["standard"]
-        out_xlsx = Path(f"tv_standard_check_{std}.xlsx").resolve()
-        export_report(res,out_xlsx)
-        print(f"[INFO] Report written: {out_xlsx}")
-    return 0 if res["passed"] else 1
+    # 報表輸出
+    if args.report or args.report_xlsx:
+        xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
+        export_report_kipling(res, xlsx_path=xlsx_path)
+        sheet = _sheet_name_for_model(model_ini)
+        print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet})")
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
