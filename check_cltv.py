@@ -82,13 +82,13 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     rules      = _na(res.get("rules", ""))
     result     = _na(res.get("result", ""))
     conditions = [ _na(x) for x in (res.get("conditions", []) or []) ]
-
+    """
     # 補足 condition_* 欄位數
     if len(conditions) < num_condition_cols:
         conditions += ["N/A"] * (num_condition_cols - len(conditions))
     else:
         conditions = conditions[:num_condition_cols]
-
+    """
     # 寫入一列
     row_values = [rules, result] + conditions
     ws.append(row_values)
@@ -238,7 +238,7 @@ def main():
     rules = "LaunchCLTVByCountry declared?\nResolved path exists?"
     conditions = [
         f'LaunchCLTVByCountry = {raw_value if raw_value is not None and raw_value != "" else "N/A"}',  # condition_1
-        f"Resolved Path = {resolved if resolved else 'N/A'}",                                          # condition_2
+        #f"Resolved Path = {resolved if resolved else 'N/A'}",                                          # condition_2
         f"File Exists = {exists_text}",                                                                # condition_3
         # 如需加入更多資訊，可在此繼續擴充 condition_4, condition_5, ...
     ]
