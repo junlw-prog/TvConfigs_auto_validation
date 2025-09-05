@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 """
-target_vs_global_country_check.py
+target_country_check.py
 
 1) Read COUNTRY_PATH from model.ini and load countries inside as target_country.
 2) From --standard (DVB/ATSC/ISDB), open root/country/<STANDARD>.ini as global_country.
 3) Check every target_country is included in global_country; fail if any missing.
-4) Print the comparison steps and append the result to an Excel report (format aligned with tv_multi_standard_validation.py),
-   with NO TvSysMap column.
-"""
+4) Print the comparison steps and append the result to an Excel report.
 
+報表格式（對齊 tv_multi_standard_validation.py 的風格）：
+  - 表頭固定順序：Rules, Result, condition_1, condition_2, condition_3, …
+  - Result 僅輸出 PASS / FAIL（不含 "Result = " 前綴）
+  - 不輸出 Model.ini 欄位（但仍用於決定分頁 PID_* / others）
+  - 表頭粗體、所有欄位同寬、換行、垂直置頂（含表頭與資料列）
+"""
 import argparse
 import os
 import re
-from typing import List, Tuple, Optional
+from typing import List, Optional
 
 # -----------------------------
 # Utilities for report (compatible style with tv_multi_standard_validation.py)
@@ -38,22 +41,20 @@ def _ensure_openpyxl():
         )
 
 
-def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 8) -> None:
+def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     """
-    欄位：
-      A: Result (PASS/FAIL)
-      B: condition_1 → Standard
-      C: condition_2 → Country Path = ...
-      D: condition_3 → Target Countries = ...
-      E: condition_4 → Global Countries = ...
-      F: condition_5 → Missing = ...
-      G: condition_6 → Model.ini = ...
-    無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    表頭固定為: Rules, Result, condition_1, condition_2, condition_3, ...
+    欄位無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    全欄統一樣式：同寬、換行、垂直置頂（包含表頭）。
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
     from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
+
+    COMMON_WIDTH = 80
+    COMMON_ALIGN = Alignment(wrap_text=True, vertical="top")
+    BOLD = Font(bold=True)
 
     def _na(s: str) -> str:
         s = (s or "").strip()
@@ -67,56 +68,46 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     except Exception:
         wb = Workbook()
 
-    # 取得或建立工作表與表頭
+    # 建立或取得 sheet（表頭固定順序）
+    header = ["Rules", "Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
     if sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
+        if ws.max_row < 1:
+            ws.append(header)
     else:
         ws = wb.create_sheet(title=sheet_name)
-        headers = ["Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
-        ws.append(headers)
+        ws.append(header)
 
-    # 取值（轉成 N/A）
-    result   = "PASS" if res.get("passed", False) else "FAIL"
-    standard = res.get("standard", "")
-    cpath    = _na(res.get("country_path", ""))
-    targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
-    globals_ = _na(", ".join(res.get("global_countries", []) or []))
-    missing  = _na(", ".join(res.get("missing", []) or []))
-    modelini = _na(res.get("model_ini", ""))
+    # 取值
+    rules      = _na(res.get("rules", ""))
+    result     = _na(res.get("result", ""))
+    conditions = [ _na(x) for x in (res.get("conditions", []) or []) ]
 
-    # 各 condition 內容（比照現有格式順序，以便和舊報表合併）
-    c1 = f"countries meet {standard}?"
-    c2 = f"Country Path = {cpath}"
-    c3 = f"Target Countries = {targets}"
-    c4 = f"Global Countries = {globals_}"
-    c5 = f"Missing = {missing}"
-    c6 = f"Model.ini = {modelini}"
-    conditions = [c1, c2, c3, c4, c5, c6]
+    # 補足 condition_* 欄位數
     if len(conditions) < num_condition_cols:
-        conditions += [""] * (num_condition_cols - len(conditions))
+        conditions += ["N/A"] * (num_condition_cols - len(conditions))
+    else:
+        conditions = conditions[:num_condition_cols]
 
     # 寫入一列
-    row = [result] + conditions[:num_condition_cols]
-    ws.append(row)
+    row_values = [rules, result] + conditions
+    ws.append(row_values)
+    last_row = ws.max_row
 
-    # 第一列粗體
-    bold_font = Font(bold=True)
-    for cell in ws['1']:
-        cell.font = bold_font
-
-    # 欄寬與對齊
-    last_row_idx = ws.max_row
-
-    # Result 垂直靠上
-    ws.cell(row=last_row_idx, column=1).alignment = Alignment(vertical="top")
-
-    # condition_* 欄位：寬、換行、垂直靠上
-    for col_idx in range(2, 2 + num_condition_cols):
+    # ── 統一樣式：所有欄位同寬 & 換行 & 垂直置頂（含表頭） ──
+    total_cols = 2 + num_condition_cols
+    for col_idx in range(1, total_cols + 1):
         col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 80
-        ws.cell(row=last_row_idx, column=col_idx).alignment = Alignment(
-            wrap_text=True, vertical="top"
-        )
+        ws.column_dimensions[col_letter].width = COMMON_WIDTH
+
+    # 表頭樣式
+    for cell in ws[1]:
+        cell.font = BOLD
+        cell.alignment = COMMON_ALIGN
+
+    # 資料列樣式（最新一列）
+    for col_idx in range(1, total_cols + 1):
+        ws.cell(row=last_row, column=col_idx).alignment = COMMON_ALIGN
 
     # 移除預設空白 Sheet（若存在且非唯一）
     if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
@@ -159,6 +150,7 @@ def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
     其他相對路徑: 以 root 為基底
     絕對路徑（非 /tvconfigs 開頭）維持不動
     """
+    tvconfigs_like = tvconfigs_like.strip()
     if tvconfigs_like.startswith("/tvconfigs/"):
         rel = tvconfigs_like[len("/tvconfigs/"):]
         return os.path.normpath(os.path.join(root, rel))
@@ -233,6 +225,7 @@ def main():
     parser.add_argument("--standard", required=True, choices=["DVB", "ATSC", "ISDB"], help="target standard to open country/<STANDARD>.ini")
     parser.add_argument("--report", action="store_true", help="export report to xlsx (default: kipling.xlsx)")
     parser.add_argument("--report-xlsx", metavar="FILE", help="export report to specific xlsx file")
+    parser.add_argument("--conditions", type=int, default=5, help="condition_* 欄位數（預設 5）")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
     args = parser.parse_args()
 
@@ -281,26 +274,34 @@ def main():
     else:
         print("[PASS] All target countries are present in global list.")
 
-    # 準備報表資料（沿用欄位語意，無 TvSysMap 欄位）
+    # 準備報表資料（對齊 tv_multi_standard_validation.py 的格式；不含 Model.ini 欄位）
+    result_text = "PASS" if passed else "FAIL"
+    rules = f"COUNTRY_PATH countries are included in {args.standard}.ini ?"
+
+    conditions = [
+        f"Standard = {args.standard}",                                             # condition_1
+        f"Country Path = {country_path if country_path else 'N/A'}",               # condition_2
+        f"Target Countries = {', '.join(target_countries) if target_countries else 'N/A'}",  # condition_3
+        f"Global Countries = {', '.join(global_countries) if global_countries else 'N/A'}",  # condition_4
+        f"Missing = {', '.join(missing) if missing else 'N/A'}",                   # condition_5
+    ]
+
     res = {
-        "standard": args.standard,
-        "passed": bool(passed),
-        "model_ini": model_ini,
-        "country_path": country_path or "",
-        "customer_target_countries": target_countries,
-        "global_countries": global_countries,
-        "missing": missing,
+        "result": result_text,      # PASS / FAIL
+        "rules": rules,             # Rules 欄位內容
+        "model_ini": model_ini,     # 用於決定分頁（PID_1..others）
+        "conditions": conditions,
     }
 
-    # 輸出簡單總結
+    # 螢幕輸出結尾摘要
     print("------------------")
     print(f"Standard: {args.standard}")
-    print(f"Result  : {'PASS' if passed else 'FAIL'}")
+    print(f"Result  : {result_text}")
 
     # 報表輸出
     if args.report or args.report_xlsx:
         xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
-        export_report(res, xlsx_path=xlsx_path)
+        export_report(res, xlsx_path=xlsx_path, num_condition_cols=args.conditions)
         sheet = _sheet_name_for_model(model_ini)
         print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet})")
 

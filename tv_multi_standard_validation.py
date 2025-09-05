@@ -34,24 +34,20 @@ def _ensure_openpyxl():
             "  安裝： pip install --user openpyxl\n"
         )
 
-
-def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 8) -> None:
+def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     """
-    欄位：
-      A: Result (PASS/FAIL)
-      B: condition_1 = Standard
-      C: condition_2 = TvSysMap = ...
-      D: condition_3 = Country Path = ...
-      E: condition_4 = Target Countries = ...
-      F: condition_5 = Missing = ...
-      G: condition_6 = Model.ini = ...
-    無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    欄位無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    表頭固定為: Rules, Result, condition_1, condition_2, condition_3, ...
+    統一：所有欄位同寬、同為自動換行、垂直置頂（包含表頭）。
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment
+    from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
-    from openpyxl.styles import Font
+
+    COMMON_WIDTH = 80
+    COMMON_ALIGN = Alignment(wrap_text=True, vertical="top")
+    BOLD = Font(bold=True)
 
     def _na(s: str) -> str:
         s = (s or "").strip()
@@ -65,62 +61,51 @@ def export_report_kipling(res: dict, xlsx_path: str = "kipling.xlsx", num_condit
     except Exception:
         wb = Workbook()
 
-    # 取得或建立工作表與表頭
+    # 建立或取得 sheet
     if sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
     else:
         ws = wb.create_sheet(title=sheet_name)
-        headers = ["Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
+        headers = ["Rules", "Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
         ws.append(headers)
 
-    # 取值（轉成 N/A）
+    # 準備資料
+    rules    = "COUNTRY_PATH exist? \ntvSysMap exist?"
     result   = "PASS" if res.get("passed", False) else "FAIL"
-    rules = f"COUNTRY_PATH exist?\ntvSysMap exist?"
     standard = _na(res.get("standard", ""))
     tvsysmap = _na(res.get("tv_sys_map", ""))
     cpath    = _na(res.get("country_path", ""))
     targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
     missing  = _na(", ".join(res.get("missing", []) or []))
-    modelini = _na(res.get("model_ini", ""))
 
-    # 各 condition 內容
-    c1 = rules
-    c2 = f"TvSysMap = {tvsysmap}"
-    c3 = f"Country Path = {cpath}"
-    c4 = standard
-    c5 = f"Target Countries = {targets}"
-    c6 = f"Missing = {missing}"
-    c7 = f"Model.ini = {modelini}"
+    # condition values
+    conds = [
+        f"TvSysMap = {tvsysmap}",     # condition_1
+        f"Country Path = {cpath}",    # condition_2
+        f"Standard = {standard}",     # condition_3
+        f"Target Countries = {targets}",  # condition_4
+        f"Missing = {missing}",       # condition_5
+    ][:num_condition_cols]
 
-    conditions = [c1, c2, c3, c4, c5, c6, c7]
-    if len(conditions) < num_condition_cols:
-        conditions += [""] * (num_condition_cols - len(conditions))
+    # 寫入 row
+    row_values = [rules, result] + conds
+    ws.append(row_values)
+    last_row = ws.max_row
 
-    # 寫入一列
-    row = [result] + conditions[:num_condition_cols]
-    ws.append(row)
-
-    bold_font = Font(bold=True)
-    for cell in ws['1']:  # 設定第一列粗體
-        cell.font = bold_font
-
-    # 欄寬
-    ws.column_dimensions["A"].width = 10   # Result
-    last_row_idx = ws.max_row
-
-    # 【新增】Result 欄 (A 欄) 也設為垂直靠上
-    ws.cell(row=last_row_idx, column=1).alignment = Alignment(vertical="top")
-
-    # condition_* 欄位：寬、換行、垂直靠上
-    from openpyxl.utils import get_column_letter
-    for col_idx in range(2, 2 + num_condition_cols):
+    # 套用樣式：欄寬、換行、垂直靠上
+    total_cols = 2 + num_condition_cols
+    for col_idx in range(1, total_cols + 1):
         col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 80
-        ws.cell(row=last_row_idx, column=col_idx).alignment = Alignment(
-            wrap_text=True, vertical="top"
-        )
+        ws.column_dimensions[col_letter].width = COMMON_WIDTH
 
-    # 移除預設空白 Sheet
+    for cell in ws[1]:  # header
+        cell.font = BOLD
+        cell.alignment = COMMON_ALIGN
+
+    for cell in ws[last_row]:
+        cell.alignment = COMMON_ALIGN
+
+    # 移除預設 Sheet
     if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
         try:
             wb.remove(wb["Sheet"])
@@ -304,7 +289,7 @@ def main():
     # 報表輸出
     if args.report or args.report_xlsx:
         xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
-        export_report_kipling(res, xlsx_path=xlsx_path)
+        export_report(res, xlsx_path=xlsx_path)
         sheet = _sheet_name_for_model(model_ini)
         print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet})")
 

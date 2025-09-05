@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-check_cltv_report.py
+check_cltv.py
 
 依照 check_cltv.py 的檢查邏輯：
   1) 讀取 model.ini，尋找 LaunchCLTVByCountry = "<path>"
   2) 將 /tvconfigs/ 前綴路徑映射到 --root 目錄下的實際檔案路徑
   3) 檢查該檔案是否存在
 
-最後的輸出格式、報表產生方式參考 target_country_check.py：
-  - 提供 --report 與 --report-xlsx 參數，輸出 Excel（每個 PID_* 分頁，首列粗體、欄位換行與垂直置頂、無值填 N/A）
-  - 欄位：
-      A: Result (PASS / FAIL / N/A)
-      B: condition_1 → LaunchCLTVByCountry = "<原始設定值或 N/A>"
-      C: condition_2 → Resolved Path = "<映射後的實際路徑或 N/A>"
-      D: condition_3 → File Exists = <Yes/No/N/A>
-      E: condition_4 → Model.ini = "<model.ini 路徑>"
-      （其餘 condition_* 留空，預設共 8 欄 condition_*，可用 --conditions 指定數量）
+報表格式「參考 tv_multi_standard_validation.py」：
+  - 首列表頭固定順序：Rules, Result, condition_1, condition_2, condition_3, ...
+  - 表頭粗體、所有欄位同寬、換行、垂直靠上（含表頭與資料列）
+  - Result 僅輸出 PASS / FAIL / N/A（不含 "Result = " 前綴）
+  - 不輸出 Model.ini 欄位（如需可自行在 conditions 中加入）
 """
 import argparse
 import os
@@ -24,7 +20,7 @@ import re
 from typing import Optional
 
 # -----------------------------
-# Utilities for report (aligned with target_country_check.py style)
+# Utilities for report
 # -----------------------------
 def _sheet_name_for_model(model_ini_path: str) -> str:
     import os, re
@@ -45,17 +41,20 @@ def _ensure_openpyxl():
         )
 
 
-def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 8) -> None:
+def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     """
-    欄位：
-      A: Result (PASS/FAIL/N/A)
-      B..I: condition_1..condition_8 （可由 num_condition_cols 調整數量）
-    無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    表頭固定為: Rules, Result, condition_1, condition_2, condition_3, ...
+    欄位無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
+    全欄統一樣式：同寬、換行、垂直置頂（包含表頭）。
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
     from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
+
+    COMMON_WIDTH = 80
+    COMMON_ALIGN = Alignment(wrap_text=True, vertical="top")
+    BOLD = Font(bold=True)
 
     def _na(s: str) -> str:
         s = (s or "").strip()
@@ -69,44 +68,46 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     except Exception:
         wb = Workbook()
 
-    # 取得或建立工作表與表頭
+    # 建立或取得 sheet（表頭固定順序）
+    header = ["Rules", "Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
     if sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
+        if ws.max_row < 1:
+            ws.append(header)
     else:
         ws = wb.create_sheet(title=sheet_name)
-        headers = ["Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
-        ws.append(headers)
+        ws.append(header)
 
     # 取值
+    rules      = _na(res.get("rules", ""))
     result     = _na(res.get("result", ""))
-    conditions = res.get("conditions", [])
-    # 轉 N/A、補足長度
-    conditions = [ _na(x) for x in conditions ]
+    conditions = [ _na(x) for x in (res.get("conditions", []) or []) ]
+
+    # 補足 condition_* 欄位數
     if len(conditions) < num_condition_cols:
-        conditions += [""] * (num_condition_cols - len(conditions))
+        conditions += ["N/A"] * (num_condition_cols - len(conditions))
+    else:
+        conditions = conditions[:num_condition_cols]
 
     # 寫入一列
-    row = [result] + conditions[:num_condition_cols]
-    ws.append(row)
+    row_values = [rules, result] + conditions
+    ws.append(row_values)
+    last_row = ws.max_row
 
-    # 第一列粗體
-    bold_font = Font(bold=True)
-    for cell in ws['1']:
-        cell.font = bold_font
-
-    # 欄寬與對齊
-    last_row_idx = ws.max_row
-
-    # Result 垂直靠上
-    ws.cell(row=last_row_idx, column=1).alignment = Alignment(vertical="top")
-
-    # condition_* 欄位：寬、換行、垂直靠上
-    for col_idx in range(2, 2 + num_condition_cols):
+    # ── 統一樣式：所有欄位同寬 & 換行 & 垂直置頂（含表頭） ──
+    total_cols = 2 + num_condition_cols
+    for col_idx in range(1, total_cols + 1):
         col_letter = get_column_letter(col_idx)
-        ws.column_dimensions[col_letter].width = 80
-        ws.cell(row=last_row_idx, column=col_idx).alignment = Alignment(
-            wrap_text=True, vertical="top"
-        )
+        ws.column_dimensions[col_letter].width = COMMON_WIDTH
+
+    # 表頭樣式
+    for cell in ws[1]:
+        cell.font = BOLD
+        cell.alignment = COMMON_ALIGN
+
+    # 資料列樣式（最新一列）
+    for col_idx in range(1, total_cols + 1):
+        ws.cell(row=last_row, column=col_idx).alignment = COMMON_ALIGN
 
     # 移除預設空白 Sheet（若存在且非唯一）
     if "Sheet" in wb.sheetnames and len(wb.sheetnames) > 1:
@@ -119,7 +120,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
 
 
 # -----------------------------
-# Core logic (based on check_cltv.py semantics)
+# Core logic
 # -----------------------------
 def _read_text_lines(path: str):
     for enc in ("utf-8", "latin-1", "utf-16"):
@@ -135,7 +136,7 @@ def _read_text_lines(path: str):
 
 
 def _strip_comment(line: str) -> str:
-    # 僅去掉行首 # 註解（保留與原檔接近的寬鬆判斷）
+    # 僅去掉行首 # 註解
     return line if not line.lstrip().startswith("#") else ""
 
 
@@ -182,12 +183,12 @@ def parse_model_ini_for_launch_cltv(model_ini_path: str) -> Optional[str]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Check LaunchCLTVByCountry in model.ini and export report (target_country_check style).")
+    parser = argparse.ArgumentParser(description="Check LaunchCLTVByCountry in model.ini and export report (tv_multi_standard_validation.py style).")
     parser.add_argument("--root", required=True, help="專案根目錄路徑（將 /tvconfigs/* 映射到此）")
     parser.add_argument("--model-ini", required=True, help="model.ini 檔案路徑（例如 model/1_xxx.ini）")
     parser.add_argument("--report", action="store_true", help="輸出報表到 xlsx（預設檔名 kipling.xlsx）")
     parser.add_argument("--report-xlsx", metavar="FILE", help="指定報表 xlsx 檔案名稱")
-    parser.add_argument("--conditions", type=int, default=8, help="condition_* 欄位數，預設 8")
+    parser.add_argument("--conditions", type=int, default=5, help="condition_* 欄位數，預設 5")
     parser.add_argument("-v", "--verbose", action="store_true", help="顯示詳細過程")
     args = parser.parse_args()
 
@@ -233,17 +234,19 @@ def main():
     print(f"Exists?   : {exists_text}")
     print(f"Result    : {result}")
 
-    # 準備報表資料
+    # 準備報表資料（符合新格式）
+    rules = "LaunchCLTVByCountry declared?\nResolved path exists?"
     conditions = [
-        f'LaunchCLTVByCountry exist?',
-        f'LaunchCLTVByCountry = {raw_value if raw_value is not None and raw_value != "" else "N/A"}',
-        f"File Exists = {exists_text}",                                                               
-        f"Model.ini = {model_ini}",                                               
+        f'LaunchCLTVByCountry = {raw_value if raw_value is not None and raw_value != "" else "N/A"}',  # condition_1
+        f"Resolved Path = {resolved if resolved else 'N/A'}",                                          # condition_2
+        f"File Exists = {exists_text}",                                                                # condition_3
+        # 如需加入更多資訊，可在此繼續擴充 condition_4, condition_5, ...
     ]
 
     res = {
-        "result": result,
-        "model_ini": model_ini,
+        "result": result,       # PASS / FAIL / N/A
+        "rules": rules,         # Rules 欄位內容
+        "model_ini": model_ini, # 用於決定分頁（PID_1..others），不會直接輸出欄位
         "conditions": conditions,
     }
 
