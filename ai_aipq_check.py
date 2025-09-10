@@ -8,7 +8,7 @@ Reference format aligned with pic_mode_test.py's Excel output:
 - Uniform column widths, wrap text, vertical top
 - Sheet chosen by model.ini basename prefix (PID_X / others)
 
-Checks in TvServIni:
+Checks in TvDefaultSettings:
 - AI = 0
 - AIPQ = 0
 Both must match (string compare after stripping) to PASS.
@@ -74,11 +74,11 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         ws.append(headers)
 
     # 準備資料
-    rules = "In TvServIni → AI=0 and AIPQ=0"
+    rules = "In TvDefaultSettingsPath → AI=0 and AIPQ=0"
     result = "PASS" if res.get("passed") else "FAIL"
 
     conds = [
-        f"TvServIni = {_na(res.get('tvserv_ini_path'))}",
+        f"TvDefaultSettings = {_na(res.get('tvserv_ini_path'))}",
         f"AI = {_na(res.get('vals', {}).get('AI'))}",
         f"AIPQ = {_na(res.get('vals', {}).get('AIPQ'))}",
         _na("; ".join(res.get("notes", []))),
@@ -148,41 +148,41 @@ def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
     return os.path.normpath(os.path.join(root, tvconfigs_like))
 
 # -----------------------------
-# Model.ini → TvServIni
+# Model.ini → TvDefaultSettingsPath
 # -----------------------------
 
-def parse_model_ini_for_tvserv(model_ini_path: str, root: str) -> Optional[str]:
+def parse_model_ini_for_TvDefaultSettings(model_ini_path: str, root: str) -> Optional[str]:
     """
     從 model.ini 找:
-      TvServIni = "<path>"
+      TvDefaultSettingsPath = "<path>"
     回傳對應到檔案系統的路徑（已映射到 --root）
     """
     txt = _read_text(model_ini_path)
-    tvserv_path = None
+    TvDefaultSettings_path = None
     for raw in txt.splitlines():
         line = _strip_comment(raw)
         if not line:
             continue
-        m = re.match(r'^\s*TvServIni\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
+        m = re.match(r'^\s*TvDefaultSettingsPath\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
         if m:
-            tvserv_path = _resolve_tvconfigs_path(root, m.group(1).strip())
+            TvDefaultSettings_path = _resolve_tvconfigs_path(root, m.group(1).strip())
             break
-    return tvserv_path
+    return TvDefaultSettings_path
 
 # -----------------------------
-# tvserv_ini parsing
+# TvDefaultSetting_ini parsing
 # -----------------------------
 
-def parse_tvserv_ai_flags(tvserv_ini_path: str) -> Dict[str, str]:
+def parse_TvDefaultSettings_ai_flags(tvDefaultSettings_ini_path: str) -> Dict[str, str]:
     """
     解析簡單 key=value，忽略註解與空白。
     關注鍵：AI, AIPQ （大小寫不敏感），回存為大寫鍵。
     """
     out: Dict[str, str] = {}
-    if not tvserv_ini_path or not os.path.exists(tvserv_ini_path):
+    if not tvDefaultSettings_ini_path or not os.path.exists(tvDefaultSettings_ini_path):
         return out
 
-    txt = _read_text(tvserv_ini_path)
+    txt = _read_text(tvDefaultSettings_ini_path)
     for raw in txt.splitlines():
         line = _strip_comment(raw)
         if not line or "=" not in line:
@@ -226,7 +226,7 @@ def evaluate(vals: Dict[str, str]) -> Tuple[bool, List[str]]:
 
 def main():
     p = argparse.ArgumentParser(
-        description="Check TvServIni for AI/AIPQ flags (AI=0 and AIPQ=0), with optional Excel report."
+        description="Check TvDefaultSettingsPath for AI/AIPQ flags (AI=0 and AIPQ=0), with optional Excel report."
     )
     p.add_argument("--model-ini", required=True, help="path to model ini (e.g., model/1_xxx.ini)")
     p.add_argument("--root", required=True, help="tvconfigs project root (maps /tvconfigs/* to here)")
@@ -244,23 +244,23 @@ def main():
         print(f"[INFO] model_ini: {model_ini}")
         print(f"[INFO] root     : {root}")
 
-    # 1) 取 TvServIni
-    tvserv_path = parse_model_ini_for_tvserv(model_ini, root)
+    # 1) 取 TvDefaultSettingsPath
+    tvDefaultSettings_path = parse_model_ini_for_TvDefaultSettings(model_ini, root)
     if args.verbose:
-        print(f"[INFO] TvServIni : {tvserv_path or '(not found in model.ini)'}")
+        print(f"[INFO] TvDefaultSettingsPath : {tvDefaultSettings_path or '(not found in model.ini)'}")
 
     vals: Dict[str, str] = {}
     notes: List[str] = []
 
-    if not tvserv_path:
-        notes.append("model.ini 未找到 TvServIni")
+    if not tvDefaultSettings_path:
+        notes.append("model.ini 未找到 TvDefaultSettingsPath")
         passed = False
-    elif not os.path.exists(tvserv_path):
-        notes.append(f"TvServIni 指向檔案不存在: {tvserv_path}")
+    elif not os.path.exists(tvDefaultSettings_path):
+        notes.append(f"TvDefaultSettingsPath 指向檔案不存在: {tvDefaultSettings_path}")
         passed = False
     else:
-        # 2) 解析 tvserv_ini，抽出 AI/AIPQ
-        vals = parse_tvserv_ai_flags(tvserv_path)
+        # 2) 解析 TvDefaultSettings_ini，抽出 AI/AIPQ
+        vals = parse_TvDefaultSettings_ai_flags(tvDefaultSettings_path)
         passed, more = evaluate(vals)
         notes.extend(more)
 
@@ -273,7 +273,7 @@ def main():
         res = {
             "passed": passed,
             "model_ini": model_ini,
-            "tvserv_ini_path": tvserv_path or "",
+            "TvDefaultSettings_ini_path": tvDefaultSettings_path or "",
             "vals": vals,
             "notes": notes,
         }
