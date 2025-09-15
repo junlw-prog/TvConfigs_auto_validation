@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+check_dap_virtualizer_mode.py
 
+功能：
+- 參考 tv_multi_standard_validation.py 的路徑映射、xlsx輸出格式、sheet 命名規則
+- 在 xlsx 內不輸出 model.ini 欄位
+- 從 model.ini 取得 DAP_Sound_Param 的值，打開指向檔案後搜尋 virtualizer_mode 參數：
+    * virtualizer_mode == 1 → PASS
+    * virtualizer_mode == 0 → FAIL
+- 其他狀況（檔案不存在、未找到鍵值、解析失敗）皆視為 FAIL，並在 Notes / Missing 欄位說明
+
+Python 3.8+
+依賴：openpyxl（僅在 --report 或 --report-xlsx 使用時需要）
+"""
 import argparse
 import os
 import re
@@ -8,7 +21,7 @@ from typing import Dict, List, Tuple, Optional
 
 
 # -----------------------------
-# Utilities for report
+# Utilities for report (參考既有專案風格)
 # -----------------------------
 
 def _sheet_name_for_model(model_ini_path: str) -> str:
@@ -27,18 +40,20 @@ def _sheet_name_for_model(model_ini_path: str) -> str:
 
 def _ensure_openpyxl():
     try:
-        import openpyxl  # noqa
+        import openpyxl  # noqa: F401
     except ImportError:
         raise SystemExit(
             "[ERROR] 需要 openpyxl 以支援報表輸出與附加。\n"
             "  安裝： pip install --user openpyxl\n"
         )
 
+
 def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     """
     欄位無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
     表頭固定為: Rules, Result, condition_1, condition_2, condition_3, ...
     統一：所有欄位同寬、同為自動換行、垂直置頂（包含表頭）。
+    *本報表不輸出 model.ini 欄位*
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
@@ -49,11 +64,11 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     COMMON_ALIGN = Alignment(wrap_text=True, vertical="top")
     BOLD = Font(bold=True)
 
-    def _na(s: str) -> str:
+    def _na(s: Optional[str]) -> str:
         s = (s or "").strip()
         return s if s else "N/A"
 
-    sheet_name = _sheet_name_for_model(res.get("model_ini", ""))
+    sheet_name = _sheet_name_for_model(res.get("model_ini_path", ""))
 
     # 開啟或新建 xlsx
     try:
@@ -70,21 +85,22 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         ws.append(headers)
 
     # 準備資料
-    rules    = "COUNTRY_PATH exist? \ntvSysMap exist?"
-    result   = "PASS" if res.get("passed", False) else "FAIL"
-    standard = _na(res.get("standard", ""))
-    tvsysmap = _na(res.get("tv_sys_map", ""))
-    cpath    = _na(res.get("country_path", ""))
-    targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
-    missing  = _na(", ".join(res.get("missing", []) or []))
+    rules = "1) 解析 DAP_Sound_Param → 2) 開啟該檔案 → 3) virtualizer_mode 是否為 1 ?"
+    result = "PASS" if res.get("passed", False) else "FAIL"
 
-    # condition values
+    dap_path = _na(res.get("dap_path_resolved"))
+    virt_val = res.get("virtualizer_mode_value")
+    virt_text = "N/A" if virt_val is None else str(virt_val)
+    decision = _na(res.get("decision", ""))
+    notes = _na(res.get("notes", ""))
+    missing = _na(", ".join(res.get("missing", []) or []))
+
     conds = [
-        f"TvSysMap = {tvsysmap}",     # condition_1
-        f"Country Path = {cpath}",    # condition_2
-        f"Standard = {standard}",     # condition_3
-        f"Target Countries = {targets}",  # condition_4
-        f"Missing = {missing}",       # condition_5
+        f"DAP_Sound_Param = {dap_path}",       # condition_1
+        f"virtualizer_mode = {virt_text}",     # condition_2
+        f"Decision = {decision}",              # condition_3
+        f"Notes = {notes}",                    # condition_4
+        f"Missing = {missing}",                # condition_5
     ][:num_condition_cols]
 
     # 寫入 row
@@ -114,6 +130,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
 
     wb.save(xlsx_path)
 
+
 # -----------------------------
 # Core parsing / validation
 # -----------------------------
@@ -127,7 +144,6 @@ def _read_text(path: str) -> str:
             continue
         except FileNotFoundError:
             raise
-    # 若皆失敗，讓原始例外往外拋
     with open(path, "r") as f:
         return f.read()
 
@@ -157,85 +173,92 @@ def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
     return os.path.normpath(os.path.join(root, tvconfigs_like))
 
 
-def parse_model_ini_for_paths(model_ini_path: str, root: str) -> Tuple[Optional[str], Optional[str]]:
+def _find_key_value_in_ini_text(text: str, key: str) -> Optional[str]:
     """
-    從 model.ini 找：
-      - tvSysMap = "<path>"
-      - COUNTRY_PATH = "<path>"
-    回傳對應到檔案系統的絕對/相對實體路徑（已映射到 --root）
+    在一般 ini/kv 檔案中找 key=value；忽略註解與空白；大小寫不敏感；允許有引號。
+    回傳 value（未去引號）。若未找到回傳 None。
+    """
+    key_re = re.compile(r'^\s*' + re.escape(key) + r'\s*=\s*"?([^"\n\r]+)"?\s*$', re.IGNORECASE)
+    for raw in text.splitlines():
+        line = _strip_comment(raw)
+        if not line:
+            continue
+        m = key_re.match(line)
+        if m:
+            return m.group(1).strip()
+    return None
+
+
+def parse_model_ini_for_dap(model_ini_path: str, root: str) -> Optional[str]:
+    """
+    從 model.ini 找 DAP_Sound_Param = "<path>" 並映射到 --root
     """
     txt = _read_text(model_ini_path)
-    tvsysmap = None
-    country_path = None
-
-    # 找 tvSysMap 與 COUNTRY_PATH（忽略前置空白，允許有引號）
-    for raw in txt.splitlines():
-        line = _strip_comment(raw)
-        if not line:
-            continue
-        m1 = re.match(r'^\s*tvSysMap\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m1 and tvsysmap is None:
-            tvsysmap = _resolve_tvconfigs_path(root, m1.group(1).strip())
-            continue
-        m2 = re.match(r'^\s*COUNTRY_PATH\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m2 and country_path is None:
-            country_path = _resolve_tvconfigs_path(root, m2.group(1).strip())
-            continue
-
-    return tvsysmap, country_path
+    val = _find_key_value_in_ini_text(txt, "DAP_Sound_Param")
+    if val is None:
+        return None
+    return _resolve_tvconfigs_path(root, val)
 
 
-def parse_country_list(country_ini_path: str) -> List[str]:
+def read_virtualizer_mode(dap_param_path: str) -> Optional[int]:
     """
-    嘗試從 COUNTRY_PATH 指到的 ini 取出國家清單。
-    設計成「寬鬆解析」：過濾註解與空白，將可能的國家 token（A-Z/_，逗號分隔）擷取出來。
+    在 DAP_Sound_Param 指向的檔案中找 virtualizer_mode；可接受：
+      - virtualizer_mode=1
+      - virtualizer_mode = 0
+      - 允許大小寫忽略/引號
+    成功則回傳 int(0/1)，找不到回傳 None。
     """
-    if not country_ini_path or not os.path.exists(country_ini_path):
-        return []
-
-    txt = _read_text(country_ini_path)
-    tokens: List[str] = []
-
-    for raw in txt.splitlines():
-        line = _strip_comment(raw)
-        if not line:
-            continue
-        # 用逗號、空白、等號都拆開試試
-        for part in re.split(r"[,\s=]+", line):
-            part = part.strip()
-            # 篩選看起來像國家名稱的 token（大寫＋底線）
-            if part and re.fullmatch(r"[A-Z][A-Z0-9_]*", part):
-                tokens.append(part)
-
-    # 去重、維持順序
-    seen = set()
-    uniq = []
-    for t in tokens:
-        if t not in seen:
-            seen.add(t)
-            uniq.append(t)
-    return uniq
+    if not dap_param_path or not os.path.exists(dap_param_path):
+        return None
+    txt = _read_text(dap_param_path)
+    val = _find_key_value_in_ini_text(txt, "virtualizer_mode")
+    if val is None:
+        return None
+    # 取出數字部分
+    m = re.match(r"^\s*([01])\s*$", val)
+    if not m:
+        # 若值不是 0/1，仍嘗試以 int 解析（容錯），失敗則 None
+        try:
+            return int(val.strip())
+        except Exception:
+            return None
+    return int(m.group(1))
 
 
-def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Optional[str], targets: List[str]) -> Dict:
+def build_result(args, model_ini: str, dap_path: Optional[str], virt_val: Optional[int]) -> Dict:
     """
-    產生報表所需的結果結構（你原本的檢查可改寫這裡填滿更多欄位）
+    產生報表所需的結果結構
     """
     missing: List[str] = []
-    if tvsysmap and not os.path.exists(tvsysmap):
-        missing.append(tvsysmap)
-    if country_path and not os.path.exists(country_path):
-        missing.append(country_path)
+    notes: List[str] = []
 
-    passed = (tvsysmap and os.path.exists(tvsysmap)) and (country_path and os.path.exists(country_path))
+    if dap_path is None:
+        notes.append("model.ini 未找到 DAP_Sound_Param")
+    elif not os.path.exists(dap_path):
+        missing.append(dap_path)
+
+    decision = ""
+    passed = False
+    if virt_val is None:
+        decision = "virtualizer_mode 未找到或格式異常 → FAIL"
+        passed = False
+    elif virt_val == 1:
+        decision = "virtualizer_mode == 1 → PASS"
+        passed = True
+    elif virt_val == 0:
+        decision = "virtualizer_mode == 0 → FAIL"
+        passed = False
+    else:
+        decision = f"virtualizer_mode 非 0/1（{virt_val}）→ FAIL"
+        passed = False
 
     return {
-        "standard": args.standard or "",
         "passed": bool(passed),
-        #"model_ini": model_ini,
-        "tv_sys_map": tvsysmap or "",
-        "country_path": country_path or "",
-        "customer_target_countries": targets,
+        "model_ini_path": model_ini,            # 僅用於決定 sheet 名稱，不輸出到表格
+        "dap_path_resolved": dap_path or "",
+        "virtualizer_mode_value": virt_val,
+        "decision": decision,
+        "notes": "; ".join(notes),
         "missing": missing,
     }
 
@@ -245,13 +268,12 @@ def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Op
 # -----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="TV multi-standard validation with Excel report (kipling.xlsx).")
+    parser = argparse.ArgumentParser(description="Check DAP virtualizer_mode from model.ini → DAP_Sound_Param (Excel report style aligned with tv_multi_standard_validation.py).")
     parser.add_argument("--model-ini", required=True, help="path to model ini (e.g., model/1_xxx.ini)")
     parser.add_argument("--root", required=True, help="tvconfigs project root (maps /tvconfigs/* to here)")
-    parser.add_argument("--standard", choices=["DVB", "ATSC", "ISDB"], default=None, help="target standard")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
 
-    # 報表參數：--report 與 --report-xlsx（任一存在即輸出；未指定路徑則用 kipling.xlsx）
+    # 報表參數
     parser.add_argument("--report", action="store_true", help="export report to xlsx (default: kipling.xlsx)")
     parser.add_argument("--report-xlsx", metavar="FILE", help="export report to specific xlsx file")
 
@@ -266,25 +288,27 @@ def main():
     if args.verbose:
         print(f"[INFO] model_ini: {model_ini}")
         print(f"[INFO] root     : {root}")
-        print(f"[INFO] standard : {args.standard or ''}")
 
-    # 解析 model.ini -> tvSysMap 與 COUNTRY_PATH
-    tvsysmap_path, country_path = parse_model_ini_for_paths(model_ini, root)
+    # 解析 model.ini → DAP_Sound_Param
+    dap_path = parse_model_ini_for_dap(model_ini, root)
     if args.verbose:
-        print(f"[INFO] tvSysMap     : {tvsysmap_path or '(not found in model.ini)'}")
-        print(f"[INFO] COUNTRY_PATH : {country_path or '(not found in model.ini)'}")
+        print(f"[INFO] DAP_Sound_Param → {dap_path if dap_path else '(not found)'}")
 
-    # 擷取國家清單（寬鬆解析）
-    targets = parse_country_list(country_path) if country_path else []
+    # 讀取 virtualizer_mode
+    virt_val = read_virtualizer_mode(dap_path) if dap_path else None
     if args.verbose:
-        print(f"[INFO] Target Countries: {', '.join(targets) if targets else '(none)'}")
+        print(f"[INFO] virtualizer_mode = {virt_val if virt_val is not None else '(not found)'}")
 
-    # 產生結果
-    res = build_result(args, model_ini, tvsysmap_path, country_path, targets)
+    # 結果
+    res = build_result(args, model_ini, dap_path, virt_val)
 
-    # 簡單輸出到 console
-    print(f"Standard: {res['standard']}")
+    # Console summary
     print(f"Result  : {'PASS' if res['passed'] else 'FAIL'}")
+    print(f"Decision: {res['decision']}")
+    if res.get("notes"):
+        print(f"Notes   : {res['notes']}")
+    if res.get("missing"):
+        print(f"Missing : {', '.join(res['missing'])}")
 
     # 報表輸出
     if args.report or args.report_xlsx:

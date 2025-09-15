@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+check_exclude_file_format.py
+
+參考 tv_multi_standard_validation.py 的「路徑解析方式」與「報表格式」，
+在指定的 model.ini 中搜尋並擷取：
+- ExcludeFileFormat
+
+並輸出到 Excel 報表（預設 kipling.xlsx）且以 model.ini 檔名前綴分 PID_N 規則；
+若檔案存在則附加資料。
+
+Result 規則：
+- 找到 ExcludeFileFormat（非空）→ PASS
+- 未找到或為空 → FAIL
+
+使用方法：
+python3.8 check_exclude_file_format.py --model-ini model/1_xxx.ini --root . --report
+python3.8 check_exclude_file_format.py --model-ini model/1_xxx.ini --root . --report-xlsx kipling.xlsx
+"""
+
 import argparse
 import os
 import re
-from typing import Dict, List, Tuple, Optional
-
+from typing import Optional
 
 # -----------------------------
-# Utilities for report
+# Utilities for report（對齊 tv_multi_standard_validation.py 風格）
 # -----------------------------
 
 def _sheet_name_for_model(model_ini_path: str) -> str:
@@ -33,6 +51,7 @@ def _ensure_openpyxl():
             "[ERROR] 需要 openpyxl 以支援報表輸出與附加。\n"
             "  安裝： pip install --user openpyxl\n"
         )
+
 
 def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     """
@@ -70,21 +89,19 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         ws.append(headers)
 
     # 準備資料
-    rules    = "COUNTRY_PATH exist? \ntvSysMap exist?"
-    result   = "PASS" if res.get("passed", False) else "FAIL"
-    standard = _na(res.get("standard", ""))
-    tvsysmap = _na(res.get("tv_sys_map", ""))
-    cpath    = _na(res.get("country_path", ""))
-    targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
-    missing  = _na(", ".join(res.get("missing", []) or []))
+    rules     = "Check ExcludeFileFormat exists"
+    result    = "PASS" if res.get("passed", False) else "FAIL"
+    eff_value = _na(res.get("exclude_file_format", ""))
+    model     = _na(res.get("model_ini", ""))
+    note      = _na(res.get("note", ""))
 
-    # condition values
+    # condition values（最多 num_condition_cols 欄）
     conds = [
-        f"TvSysMap = {tvsysmap}",     # condition_1
-        f"Country Path = {cpath}",    # condition_2
-        f"Standard = {standard}",     # condition_3
-        f"Target Countries = {targets}",  # condition_4
-        f"Missing = {missing}",       # condition_5
+        f"ExcludeFileFormat = {eff_value}",  # condition_1
+        #f"model.ini = {model}",             # condition_2（補充）
+        f"note = {note}",                   # condition_3（補充/保留）
+        #"N/A",                              # condition_4（保留）
+        #"N/A",                              # condition_5（保留）
     ][:num_condition_cols]
 
     # 寫入 row
@@ -92,7 +109,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     ws.append(row_values)
     last_row = ws.max_row
 
-    # 套用樣式：欄寬、換行、垂直靠上
+    # 套用樣式：欄寬、換行、垂直靠上（含表頭）
     total_cols = 2 + num_condition_cols
     for col_idx in range(1, total_cols + 1):
         col_letter = get_column_letter(col_idx)
@@ -114,11 +131,13 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
 
     wb.save(xlsx_path)
 
+
 # -----------------------------
-# Core parsing / validation
+# Core parsing
 # -----------------------------
 
 def _read_text(path: str) -> str:
+    # 寬鬆讀取，容忍常見編碼
     for enc in ("utf-8", "latin-1", "utf-16"):
         try:
             with open(path, "r", encoding=enc) as f:
@@ -127,7 +146,6 @@ def _read_text(path: str) -> str:
             continue
         except FileNotFoundError:
             raise
-    # 若皆失敗，讓原始例外往外拋
     with open(path, "r") as f:
         return f.read()
 
@@ -157,86 +175,37 @@ def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
     return os.path.normpath(os.path.join(root, tvconfigs_like))
 
 
-def parse_model_ini_for_paths(model_ini_path: str, root: str) -> Tuple[Optional[str], Optional[str]]:
+def parse_exclude_file_format(model_ini_path: str) -> Optional[str]:
     """
-    從 model.ini 找：
-      - tvSysMap = "<path>"
-      - COUNTRY_PATH = "<path>"
-    回傳對應到檔案系統的絕對/相對實體路徑（已映射到 --root）
+    從 model.ini 內解析 ExcludeFileFormat（忽略大小寫、允許前後引號與空白）。
+    例如：
+      ExcludeFileFormat = "apk,zip"
+      excludeFileFormat= bin
     """
     txt = _read_text(model_ini_path)
-    tvsysmap = None
-    country_path = None
 
-    # 找 tvSysMap 與 COUNTRY_PATH（忽略前置空白，允許有引號）
+    # 單行關鍵字解析（只取第一個命中的值）
+    pat = re.compile(r'^\s*ExcludeFileFormat\s*=\s*"?([^"\r\n]+)"?\s*$', re.IGNORECASE)
     for raw in txt.splitlines():
         line = _strip_comment(raw)
         if not line:
             continue
-        m1 = re.match(r'^\s*tvSysMap\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m1 and tvsysmap is None:
-            tvsysmap = _resolve_tvconfigs_path(root, m1.group(1).strip())
-            continue
-        m2 = re.match(r'^\s*COUNTRY_PATH\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m2 and country_path is None:
-            country_path = _resolve_tvconfigs_path(root, m2.group(1).strip())
-            continue
-
-    return tvsysmap, country_path
+        m = pat.match(line)
+        if m:
+            return m.group(1).strip()
+    return None
 
 
-def parse_country_list(country_ini_path: str) -> List[str]:
-    """
-    嘗試從 COUNTRY_PATH 指到的 ini 取出國家清單。
-    設計成「寬鬆解析」：過濾註解與空白，將可能的國家 token（A-Z/_，逗號分隔）擷取出來。
-    """
-    if not country_ini_path or not os.path.exists(country_ini_path):
-        return []
-
-    txt = _read_text(country_ini_path)
-    tokens: List[str] = []
-
-    for raw in txt.splitlines():
-        line = _strip_comment(raw)
-        if not line:
-            continue
-        # 用逗號、空白、等號都拆開試試
-        for part in re.split(r"[,\s=]+", line):
-            part = part.strip()
-            # 篩選看起來像國家名稱的 token（大寫＋底線）
-            if part and re.fullmatch(r"[A-Z][A-Z0-9_]*", part):
-                tokens.append(part)
-
-    # 去重、維持順序
-    seen = set()
-    uniq = []
-    for t in tokens:
-        if t not in seen:
-            seen.add(t)
-            uniq.append(t)
-    return uniq
-
-
-def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Optional[str], targets: List[str]) -> Dict:
-    """
-    產生報表所需的結果結構（你原本的檢查可改寫這裡填滿更多欄位）
-    """
-    missing: List[str] = []
-    if tvsysmap and not os.path.exists(tvsysmap):
-        missing.append(tvsysmap)
-    if country_path and not os.path.exists(country_path):
-        missing.append(country_path)
-
-    passed = (tvsysmap and os.path.exists(tvsysmap)) and (country_path and os.path.exists(country_path))
-
+def build_result(model_ini: str, value: Optional[str]) -> dict:
+    passed = bool(value and value.strip())
+    note = ""
+    if not passed:
+        note = "ExcludeFileFormat not found or empty"
     return {
-        "standard": args.standard or "",
-        "passed": bool(passed),
-        #"model_ini": model_ini,
-        "tv_sys_map": tvsysmap or "",
-        "country_path": country_path or "",
-        "customer_target_countries": targets,
-        "missing": missing,
+        "passed": passed,
+        "model_ini": model_ini,
+        "exclude_file_format": value or "",
+        "note": note,
     }
 
 
@@ -245,13 +214,12 @@ def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Op
 # -----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="TV multi-standard validation with Excel report (kipling.xlsx).")
+    parser = argparse.ArgumentParser(description="Parse ExcludeFileFormat from model.ini and export to Excel report (kipling.xlsx).")
     parser.add_argument("--model-ini", required=True, help="path to model ini (e.g., model/1_xxx.ini)")
     parser.add_argument("--root", required=True, help="tvconfigs project root (maps /tvconfigs/* to here)")
-    parser.add_argument("--standard", choices=["DVB", "ATSC", "ISDB"], default=None, help="target standard")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
 
-    # 報表參數：--report 與 --report-xlsx（任一存在即輸出；未指定路徑則用 kipling.xlsx）
+    # 報表輸出選項：--report 或 --report-xlsx（任一存在即輸出；未指定路徑則用 kipling.xlsx）
     parser.add_argument("--report", action="store_true", help="export report to xlsx (default: kipling.xlsx)")
     parser.add_argument("--report-xlsx", metavar="FILE", help="export report to specific xlsx file")
 
@@ -262,29 +230,19 @@ def main():
         raise SystemExit(f"[ERROR] model ini not found: {model_ini}")
 
     root = os.path.abspath(os.path.normpath(args.root))
-
     if args.verbose:
         print(f"[INFO] model_ini: {model_ini}")
         print(f"[INFO] root     : {root}")
-        print(f"[INFO] standard : {args.standard or ''}")
 
-    # 解析 model.ini -> tvSysMap 與 COUNTRY_PATH
-    tvsysmap_path, country_path = parse_model_ini_for_paths(model_ini, root)
+    # 解析 ExcludeFileFormat
+    value = parse_exclude_file_format(model_ini)
     if args.verbose:
-        print(f"[INFO] tvSysMap     : {tvsysmap_path or '(not found in model.ini)'}")
-        print(f"[INFO] COUNTRY_PATH : {country_path or '(not found in model.ini)'}")
+        print(f"[INFO] ExcludeFileFormat: {value if value else '(N/A)'}")
 
-    # 擷取國家清單（寬鬆解析）
-    targets = parse_country_list(country_path) if country_path else []
-    if args.verbose:
-        print(f"[INFO] Target Countries: {', '.join(targets) if targets else '(none)'}")
-
-    # 產生結果
-    res = build_result(args, model_ini, tvsysmap_path, country_path, targets)
-
-    # 簡單輸出到 console
-    print(f"Standard: {res['standard']}")
-    print(f"Result  : {'PASS' if res['passed'] else 'FAIL'}")
+    # 輸出到 console
+    res = build_result(model_ini, value)
+    print(f"Result : {'PASS' if res['passed'] else 'FAIL'}")
+    print(f"ExcludeFileFormat: {res['exclude_file_format'] or '(N/A)'}")
 
     # 報表輸出
     if args.report or args.report_xlsx:
