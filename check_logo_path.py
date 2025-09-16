@@ -115,8 +115,8 @@ def detect_sheet_name_from_model(model_ini: Path) -> str:
     m = re.match(r'^(\d{1,3})_', model_ini.name)
     if m:
         n = int(m.group(1))
-        if 1 <= n <= 20:
-            return f"PID_{n}"
+        #if 1 <= n <= 20:
+        return f"PID_{n}"
     return "others"
 def format_console_row(rules: str, result: str, c1: str, c2: str) -> str:
     return f"{rules:16} | {result:4} | {c1} | {c2}"

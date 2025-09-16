@@ -19,6 +19,16 @@ import os
 import re
 from typing import Optional, Dict, Tuple, List
 
+def _sheet_name_for_model(model_ini_path: str) -> str:
+    """
+    以 model.ini 檔名的數字前綴決定 sheet 名：'PID_<N>'；無數字則 'others'
+    例：'1_EU_xxx.ini' → 'PID_1'
+    """
+    base = os.path.basename(model_ini_path or "")
+    m = re.match(r"^(\d+)_", base)
+    if m:
+        return f"PID_{int(m.group(1))}"
+    return "others"
 
 # -----------------------------
 # File reading & parsing helpers
@@ -184,13 +194,14 @@ def main():
 
     print(f"[CHECK] isSupportDarkDetail = {res['value'] or 'N/A'}")
     print(f"Result : {'PASS' if res['passed'] else 'FAIL'}")
+    sheet = _sheet_name_for_model(args.model_ini)
 
     # Handle report
     if args.report_xlsx:
-        export_simple_report(res, args.report_xlsx)
+        export_simple_report(res, args.report_xlsx, sheet)
         print(f"[INFO] Report appended to: {args.report_xlsx}")
     elif args.report:
-        export_simple_report(res, "kipling.xlsx")
+        export_simple_report(res, "kipling.xlsx", sheet)
         print(f"[INFO] Report appended to: kipling.xlsx")
 
 if __name__ == "__main__":

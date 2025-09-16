@@ -1,14 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+check_factory_menu_params.py
+
+參考 tv_multi_standard_validation.py 的「路徑解析方式」與「報表格式」，
+從指定的 model.ini 讀出以下三個參數，並將值寫入 Excel 報表：
+- RtkFacktoryMenuComboKey
+- RtkFacktoryMenuPackage
+- RtkFacktoryMenuActivity
+
+說明：
+1) 路徑解析：支援將 "/tvconfigs/..." 映射到 --root 之下的對應路徑；
+   其他相對路徑也會視為相對於 --root 解析。
+2) 報表：沿用「Rules, Result, condition_1, ...」表頭，PID_前綴分頁（1→PID_1），
+   若檔案存在則附加資料，欄寬/自動換行/垂直靠上與參考檔一致。
+3) 判定：三個參數都找到 → PASS；任一缺少 → FAIL。
+
+使用方法：
+python3.8 check_factory_menu_params.py --model-ini model/1_xxx.ini --root . --report
+
+作者：Auto-generated
+"""
+
 import argparse
 import os
 import re
 from typing import Dict, List, Tuple, Optional
 
-
 # -----------------------------
-# Utilities for report
+# Utilities for report (對齊 tv_multi_standard_validation.py 風格)
 # -----------------------------
 
 def _sheet_name_for_model(model_ini_path: str) -> str:
@@ -34,8 +55,8 @@ def _ensure_openpyxl():
             "  安裝： pip install --user openpyxl\n"
         )
 
-#def export_report(res: dict, xlsx_path: str = "kipling.xlsx", sheet_name: str) -> None:
-def export_report(res: dict, xlsx_path: str, sheet_name: str,  num_condition_cols: int = 5) -> None:
+
+def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     """
     欄位無值時以 'N/A' 填入。依 model.ini 檔名前綴分頁（PID_1、PID_2…；非數字→others），既有資料則附加。
     表頭固定為: Rules, Result, condition_1, condition_2, condition_3, ...
@@ -54,6 +75,8 @@ def export_report(res: dict, xlsx_path: str, sheet_name: str,  num_condition_col
         s = (s or "").strip()
         return s if s else "N/A"
 
+    sheet_name = _sheet_name_for_model(res.get("model_ini", ""))
+
     # 開啟或新建 xlsx
     try:
         wb = load_workbook(xlsx_path)
@@ -69,21 +92,21 @@ def export_report(res: dict, xlsx_path: str, sheet_name: str,  num_condition_col
         ws.append(headers)
 
     # 準備資料
-    rules    = "COUNTRY_PATH exist? \ntvSysMap exist?"
+    rules    = "Check RtkFacktoryMenu* keys exist"
     result   = "PASS" if res.get("passed", False) else "FAIL"
-    standard = _na(res.get("standard", ""))
-    tvsysmap = _na(res.get("tv_sys_map", ""))
-    cpath    = _na(res.get("country_path", ""))
-    targets  = _na(", ".join(res.get("customer_target_countries", []) or []))
-    missing  = _na(", ".join(res.get("missing", []) or []))
 
-    # condition values
+    combo    = _na(res.get("combo_key", ""))
+    pkg      = _na(res.get("package", ""))
+    activity = _na(res.get("activity", ""))
+    model    = _na(res.get("model_ini", ""))
+
+    # condition values（與參考檔案一致：最多 num_condition_cols 欄）
     conds = [
-        f"TvSysMap = {tvsysmap}",     # condition_1
-        f"Country Path = {cpath}",    # condition_2
-        f"Standard = {standard}",     # condition_3
-        f"Target Countries = {targets}",  # condition_4
-        f"Missing = {missing}",       # condition_5
+        f"RtkFacktoryMenuComboKey = {combo}",     # condition_1
+        f"RtkFacktoryMenuPackage  = {pkg}",       # condition_2
+        f"RtkFacktoryMenuActivity = {activity}",  # condition_3
+        f"model.ini = {model}",                   # condition_4（補充資訊，不影響判斷）
+        "N/A",                                    # condition_5（保留欄）
     ][:num_condition_cols]
 
     # 寫入 row
@@ -113,8 +136,9 @@ def export_report(res: dict, xlsx_path: str, sheet_name: str,  num_condition_col
 
     wb.save(xlsx_path)
 
+
 # -----------------------------
-# Core parsing / validation
+# Core parsing
 # -----------------------------
 
 def _read_text(path: str) -> str:
@@ -156,86 +180,62 @@ def _resolve_tvconfigs_path(root: str, tvconfigs_like: str) -> str:
     return os.path.normpath(os.path.join(root, tvconfigs_like))
 
 
-def parse_model_ini_for_paths(model_ini_path: str, root: str) -> Tuple[Optional[str], Optional[str]]:
+def parse_factory_menu_keys(model_ini_path: str) -> Dict[str, Optional[str]]:
     """
-    從 model.ini 找：
-      - tvSysMap = "<path>"
-      - COUNTRY_PATH = "<path>"
-    回傳對應到檔案系統的絕對/相對實體路徑（已映射到 --root）
+    從 model.ini 內解析三個參數值（忽略大小寫、允許前後引號與空白）：
+      - RtkFacktoryMenuComboKey
+      - RtkFacktoryMenuPackage
+      - RtkFacktoryMenuActivity
+    同時也兼容「RtkFactoryMenuXXX」拼寫（避免 Facktory/Factory 混用）。
     """
     txt = _read_text(model_ini_path)
-    tvsysmap = None
-    country_path = None
 
-    # 找 tvSysMap 與 COUNTRY_PATH（忽略前置空白，允許有引號）
-    for raw in txt.splitlines():
-        line = _strip_comment(raw)
-        if not line:
-            continue
-        m1 = re.match(r'^\s*tvSysMap\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m1 and tvsysmap is None:
-            tvsysmap = _resolve_tvconfigs_path(root, m1.group(1).strip())
-            continue
-        m2 = re.match(r'^\s*COUNTRY_PATH\s*=\s*"?([^"]+)"?\s*$', line, re.IGNORECASE)
-        if m2 and country_path is None:
-            country_path = _resolve_tvconfigs_path(root, m2.group(1).strip())
-            continue
+    # 建立一組正則，依序搜尋；第一個命中即採用
+    patterns = {
+        "combo_key": [
+            r'^\s*RtkFacktoryMenuComboKey\s*=\s*"?([^"\r\n]+)"?\s*$',
+            r'^\s*RtkFactoryMenuComboKey\s*=\s*"?([^"\r\n]+)"?\s*$',
+        ],
+        "package": [
+            r'^\s*RtkFacktoryMenuPackage\s*=\s*"?([^"\r\n]+)"?\s*$',
+            r'^\s*RtkFactoryMenuPackage\s*=\s*"?([^"\r\n]+)"?\s*$',
+        ],
+        "activity": [
+            r'^\s*RtkFacktoryMenuActivity\s*=\s*"?([^"\r\n]+)"?\s*$',
+            r'^\s*RtkFactoryMenuActivity\s*=\s*"?([^"\r\n]+)"?\s*$',
+        ],
+    }
 
-    return tvsysmap, country_path
-
-
-def parse_country_list(country_ini_path: str) -> List[str]:
-    """
-    嘗試從 COUNTRY_PATH 指到的 ini 取出國家清單。
-    設計成「寬鬆解析」：過濾註解與空白，將可能的國家 token（A-Z/_，逗號分隔）擷取出來。
-    """
-    if not country_ini_path or not os.path.exists(country_ini_path):
-        return []
-
-    txt = _read_text(country_ini_path)
-    tokens: List[str] = []
+    results: Dict[str, Optional[str]] = {"combo_key": None, "package": None, "activity": None}
 
     for raw in txt.splitlines():
         line = _strip_comment(raw)
         if not line:
             continue
-        # 用逗號、空白、等號都拆開試試
-        for part in re.split(r"[,\s=]+", line):
-            part = part.strip()
-            # 篩選看起來像國家名稱的 token（大寫＋底線）
-            if part and re.fullmatch(r"[A-Z][A-Z0-9_]*", part):
-                tokens.append(part)
+        for key, p_list in patterns.items():
+            if results[key] is not None:
+                continue
+            for p in p_list:
+                m = re.match(p, line, re.IGNORECASE)
+                if m:
+                    results[key] = m.group(1).strip()
+                    break
 
-    # 去重、維持順序
-    seen = set()
-    uniq = []
-    for t in tokens:
-        if t not in seen:
-            seen.add(t)
-            uniq.append(t)
-    return uniq
+    return results
 
 
-def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Optional[str], targets: List[str]) -> Dict:
+def build_result(model_ini: str, keys: Dict[str, Optional[str]]) -> Dict:
     """
-    產生報表所需的結果結構（你原本的檢查可改寫這裡填滿更多欄位）
+    彙整報表欄位。
     """
-    missing: List[str] = []
-    if tvsysmap and not os.path.exists(tvsysmap):
-        missing.append(tvsysmap)
-    if country_path and not os.path.exists(country_path):
-        missing.append(country_path)
-
-    passed = (tvsysmap and os.path.exists(tvsysmap)) and (country_path and os.path.exists(country_path))
+    passed = all(keys.get(k) for k in ("combo_key", "package", "activity"))
 
     return {
-        "standard": args.standard or "",
         "passed": bool(passed),
-        #"model_ini": model_ini,
-        "tv_sys_map": tvsysmap or "",
-        "country_path": country_path or "",
-        "customer_target_countries": targets,
-        "missing": missing,
+        "model_ini": model_ini,
+        "combo_key": keys.get("combo_key") or "",
+        "package": keys.get("package") or "",
+        "activity": keys.get("activity") or "",
     }
 
 
@@ -244,10 +244,9 @@ def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Op
 # -----------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="TV multi-standard validation with Excel report (kipling.xlsx).")
+    parser = argparse.ArgumentParser(description="Check RtkFacktoryMenu* params from model.ini and export to Excel report (kipling.xlsx).")
     parser.add_argument("--model-ini", required=True, help="path to model ini (e.g., model/1_xxx.ini)")
     parser.add_argument("--root", required=True, help="tvconfigs project root (maps /tvconfigs/* to here)")
-    parser.add_argument("--standard", choices=["DVB", "ATSC", "ISDB"], default=None, help="target standard")
     parser.add_argument("-v", "--verbose", action="store_true", help="verbose logs")
 
     # 報表參數：--report 與 --report-xlsx（任一存在即輸出；未指定路徑則用 kipling.xlsx）
@@ -265,33 +264,30 @@ def main():
     if args.verbose:
         print(f"[INFO] model_ini: {model_ini}")
         print(f"[INFO] root     : {root}")
-        print(f"[INFO] standard : {args.standard or ''}")
 
-    # 解析 model.ini -> tvSysMap 與 COUNTRY_PATH
-    tvsysmap_path, country_path = parse_model_ini_for_paths(model_ini, root)
+    # 解析三個參數
+    keys = parse_factory_menu_keys(model_ini)
     if args.verbose:
-        print(f"[INFO] tvSysMap     : {tvsysmap_path or '(not found in model.ini)'}")
-        print(f"[INFO] COUNTRY_PATH : {country_path or '(not found in model.ini)'}")
-
-    # 擷取國家清單（寬鬆解析）
-    targets = parse_country_list(country_path) if country_path else []
-    if args.verbose:
-        print(f"[INFO] Target Countries: {', '.join(targets) if targets else '(none)'}")
+        print("[INFO] Parsed keys:",
+              f"ComboKey={keys.get('combo_key') or '(N/A)'};",
+              f"Package={keys.get('package') or '(N/A)'};",
+              f"Activity={keys.get('activity') or '(N/A)'}")
 
     # 產生結果
-    res = build_result(args, model_ini, tvsysmap_path, country_path, targets)
+    res = build_result(model_ini, keys)
 
-    # 簡單輸出到 console
-    print(f"Standard: {res['standard']}")
+    # Console 輸出
     print(f"Result  : {'PASS' if res['passed'] else 'FAIL'}")
+    print(f"ComboKey: {res['combo_key'] or '(N/A)'}")
+    print(f"Package : {res['package'] or '(N/A)'}")
+    print(f"Activity: {res['activity'] or '(N/A)'}")
 
     # 報表輸出
     if args.report or args.report_xlsx:
         xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
-        sheet_name = _sheet_name_for_model(model_ini)
-        export_report(res, xlsx_path, sheet_name)
-        #sheet = _sheet_name_for_model(model_ini)
-        print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet_name})")
+        export_report(res, xlsx_path=xlsx_path)
+        sheet = _sheet_name_for_model(model_ini)
+        print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet})")
 
 
 if __name__ == "__main__":
