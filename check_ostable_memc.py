@@ -50,7 +50,7 @@ def export_report_row(model_ini: str, rules: str, passed: bool, conditions: List
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -81,6 +81,19 @@ def export_report_row(model_ini: str, rules: str, passed: bool, conditions: List
 
     ws.append(row)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if passed == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if conditions[2] != "Default/dolby_bright MEMC_Level = 0" :
+        ws.cell(row=last_row, column=5).fill = failed_color
+    if conditions[3] != "VO/dolby_bright MEMC_Level = 0":
+        ws.cell(row=last_row, column=6).fill = failed_color
 
     # 樣式
     total_cols = len(ws[1])
@@ -312,7 +325,9 @@ def main():
     # 5) 報表輸出
     if args.report or args.report_xlsx:
         xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
-        rules = "OSD: [PictureModeData_Default/VO]->[dolby_bright]->MEMC_Level must both be 0"
+        rules = "3. Netflix 要將 PictureModeData_Default/PictureModeData_VO 的 Memc off\n" \
+                "  - OSDTable.ini->[PictureModeData_Default]->[dolby_bright]->MEMC_Level=0\n" \
+                "  - OSDTable.ini->[PictureModeData_VO]->[dolby_bright]->MEMC_Level=0"
         conds: List[str] = []
         conds.append(f"PQ_OSD = {pq_osd_value or ''}")
         conds.append(f"OSD file exists = {exists}")

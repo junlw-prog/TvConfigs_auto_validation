@@ -62,7 +62,7 @@ def _strip_comment(line: str) -> str:
 
 def _find_is_show_setupwizard(model_ini_path: str) -> Optional[str]:
     """
-    Find the (uncommented) value of isShowSetupwizard in model.ini.
+    Find the (uncommented) value of isSupportDarkDetail in model.ini.
     Returns the raw value string (without quotes), or None if not found.
     """
     text = _read_text(model_ini_path)
@@ -71,7 +71,7 @@ def _find_is_show_setupwizard(model_ini_path: str) -> Optional[str]:
         if not line or "=" not in line:
             continue
         # Accept quoted or unquoted values; capture minimal any-char
-        m = re.match(r'^\s*isShowSetupwizard\s*=\s*("?)(.*?)\1\s*$', line, re.IGNORECASE)
+        m = re.match(r'^\s*isSupportDarkDetail\s*=\s*("?)(.*?)\1\s*$', line, re.IGNORECASE)
         if m:
             return m.group(2).strip()
     return None
@@ -83,19 +83,19 @@ def _find_is_show_setupwizard(model_ini_path: str) -> Optional[str]:
 
 def check_is_show_setupwizard(model_ini_path: str) -> Dict[str, object]:
     """
-    Check if isShowSetupwizard == true.
+    Check if isSupportDarkDetail == true.
     Returns a result dict with keys: passed (bool), value (str or ''), notes (list[str])
     """
     notes: List[str] = []
     value = _find_is_show_setupwizard(model_ini_path)
     if value is None:
-        notes.append("isShowSetupwizard 未宣告或僅存在於註解中")
+        notes.append("isSupportDarkDetail 未宣告或僅存在於註解中")
         passed = False
         value_str = ""
     else:
         passed = (value.strip().lower() == "true")
         if not passed:
-            notes.append(f"isShowSetupwizard 不是 true (got: {value})")
+            notes.append(f"isSupportDarkDetail 不是 true (got: {value})")
         value_str = value
 
     return {
@@ -109,7 +109,7 @@ def check_is_show_setupwizard(model_ini_path: str) -> Dict[str, object]:
 # XLSX report (simple, no paths)
 # -----------------------------
 
-def export_simple_report(res: Dict[str, object], xlsx_path: str, sheet_name: str = "Setupwizard") -> None:
+def export_simple_report(res: Dict[str, object], xlsx_path: str, sheet_name: str = "SupportDarkDetail") -> None:
     """
     Export a compact report with columns: Rules, Result, condition_1
     - No model.ini/path columns
@@ -143,9 +143,10 @@ def export_simple_report(res: Dict[str, object], xlsx_path: str, sheet_name: str
         ws.append(["Rules", "Result", "condition_1"])
 
     # Row content
-    rules = f"5.請注意 model ini : isShowSetupwizard = true;\n"
+    rules = "4. Dolyb Dark UI 要開\n" \
+            "    - isSupportDarkDetail=true"
     result = "PASS" if bool(res.get("passed")) else "FAIL"
-    cond1 = f"isShowSetupwizard = {res.get('value') or 'N/A'}"
+    cond1 = f"isSupportDarkDetail = {res.get('value') or 'N/A'}"
 
     ws.append([rules, result, cond1])
     last_row = ws.max_row
@@ -158,6 +159,8 @@ def export_simple_report(res: Dict[str, object], xlsx_path: str, sheet_name: str
     first_cell.fill = rules_color
     if result == "FAIL":
         ws.cell(row=last_row, column=2).fill = failed_color
+    if cond1 == "isSupportDarkDetail = N/A":
+        ws.cell(row=last_row, column=3).fill = failed_color
 
     # Styling
     for col in range(1, 3 + 1):
@@ -186,7 +189,7 @@ def export_simple_report(res: Dict[str, object], xlsx_path: str, sheet_name: str
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Check model.ini:isShowSetupwizard == true (PASS), else FAIL."
+        description="Check model.ini:isSupportDarkDetail == true (PASS), else FAIL."
     )
     ap.add_argument("--model-ini", required=True, help="Path to model.ini")
     ap.add_argument("--report", action="store_true",
@@ -201,16 +204,16 @@ def main():
 
     res = check_is_show_setupwizard(args.model_ini)
 
-    print(f"[CHECK] isShowSetupwizard = {res['value'] or 'N/A'}")
+    print(f"[CHECK] isSupportDarkDetail = {res['value'] or 'N/A'}")
     print(f"Result : {'PASS' if res['passed'] else 'FAIL'}")
-    sheet_name = _sheet_name_for_model(args.model_ini)
+    sheet = _sheet_name_for_model(args.model_ini)
 
     # Handle report
     if args.report_xlsx:
-        export_simple_report(res, args.report_xlsx, sheet_name)
+        export_simple_report(res, args.report_xlsx, sheet)
         print(f"[INFO] Report appended to: {args.report_xlsx}")
     elif args.report:
-        export_simple_report(res, "kipling.xlsx", sheet_name)
+        export_simple_report(res, "kipling.xlsx", sheet)
         print(f"[INFO] Report appended to: kipling.xlsx")
 
 if __name__ == "__main__":

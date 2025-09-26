@@ -60,7 +60,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -88,7 +88,12 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         ws.append(headers)
 
     # 準備資料
-    rules = "TvServIni flags must match: DEFAULT_PICTURE_MODE=4, DEFAULT_DOLBY_PICTURE_MODE=1, SUPPORT_MAT=true"
+    rules = f"1. NTS  認証 all source picture mode default 是 movie mode\n" \
+            f"2. NTS 認證 , dolby content picture mode default是 dark mode\n" \
+            f"    - model.ini->TvServIni 是否設定?\n" \
+            f"    - TvServIni->DEFAULT_PICTURE_MODE=4\n" \
+            f"    - TvServIni->DEFAULT_DOLBY_PICTURE_MODE=1\n" \
+            f"    - TvServIni->SUPPORT_MAT=true"
     result = "PASS" if res.get("passed", False) else "FAIL"
 
     tvservini = _na(res.get("tvservini_path", ""))
@@ -112,6 +117,21 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     row_values = [rules, result] + conds
     ws.append(row_values)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if c_pm == ("N/A" or not 4) :
+        ws.cell(row=last_row, column=4).fill = failed_color
+    if c_dpm == ("N/A" or not 1):
+        ws.cell(row=last_row, column=5).fill = failed_color
+    if c_mat == ("N/A" or not True):
+        ws.cell(row=last_row, column=6).fill = failed_color
 
     # 套用樣式：欄寬、換行、垂直靠上（包含表頭）
     total_cols = 2 + num_condition_cols
@@ -243,25 +263,25 @@ def check_flags(tvservini_path: Optional[str]) -> Dict[str, str]:
         v_pm = kv.get("default_picture_mode")
         if v_pm is not None:
             ok_pm = (v_pm.strip() == "4")
-            desc_pm = f"expected 4, found {v_pm}"
+            desc_pm = f"{v_pm}"
         else:
-            desc_pm = "expected 4, found (missing)"
+            desc_pm = "not found"
 
         # DEFAULT_DOLBY_PICTURE_MODE
         v_dpm = kv.get("default_dolby_picture_mode")
         if v_dpm is not None:
             ok_dpm = (v_dpm.strip() == "1")
-            desc_dpm = f"expected 1, found {v_dpm}"
+            desc_dpm = f"{v_dpm}"
         else:
-            desc_dpm = "expected 1, found (missing)"
+            desc_dpm = "not found"
 
         # SUPPORT_MAT
         v_mat = kv.get("support_mat")
         if v_mat is not None:
             ok_mat = (v_mat.strip().lower() == "true")
-            desc_mat = f"expected true, found {v_mat}"
+            desc_mat = f"{v_mat}"
         else:
-            desc_mat = "expected true, found (missing)"
+            desc_mat = "not found"
 
     return {
         "desc_pm": desc_pm,

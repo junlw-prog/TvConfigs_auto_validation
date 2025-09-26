@@ -40,7 +40,7 @@ def _ensure_openpyxl():
 def export_report(res: Dict[str, str], xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -69,11 +69,11 @@ def export_report(res: Dict[str, str], xlsx_path: str = "kipling.xlsx", num_cond
 
     # 準備資料
     rules = (
-        "1) PQ_OSD = /tvconfigs/PQ_OSD/OSDTable.ini\n"
-        "2) ICM = /tvconfigs/PQ/ICM.bin\n"
-        "3) DBC = /tvconfigs/PQ/DBC.ini\n"
-        "4) PQ_PANEL_COLOR -> *.ini\n"
-        "5) All above files exist"
+        "使用 new PQ Menu 架構(R+5.0)\n"
+        "  1) model.ini->PQ_OSD\n"
+        "  2) model.ini->ICM\n"
+        "  3) model.ini->DBC\n"
+        "  4) model.ini->PQ_PANEL_COLOR"
     )
     result   = "PASS" if res.get("passed", False) else "FAIL"
 
@@ -88,6 +88,8 @@ def export_report(res: Dict[str, str], xlsx_path: str = "kipling.xlsx", num_cond
     row_values = [rules, result] + conds[:num_condition_cols]
     ws.append(row_values)
     last_row = ws.max_row
+
+
 
     total_cols = 2 + num_condition_cols
     for col_idx in range(1, total_cols + 1):

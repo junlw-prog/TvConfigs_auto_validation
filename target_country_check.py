@@ -49,7 +49,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -93,6 +93,17 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     row_values = [rules, result] + conditions
     ws.append(row_values)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if "N/A" not in conditions[-1]:
+        ws.cell(row=last_row, column=7).fill = failed_color
 
     # ── 統一樣式：所有欄位同寬 & 換行 & 垂直置頂（含表頭） ──
     total_cols = 2 + num_condition_cols
@@ -276,14 +287,24 @@ def main():
 
     # 準備報表資料（對齊 tv_multi_standard_validation.py 的格式；不含 Model.ini 欄位）
     result_text = "PASS" if passed else "FAIL"
-    rules = f"COUNTRY_PATH countries are included in {args.standard}.ini ?"
+    #rules = f"COUNTRY_PATH countries are included in {args.standard}.ini ?"
+    stdVal = args.standard
+    if stdVal.lower() == "dvb":
+        rules = f"2. EU 只有包含 DVB 的國家\n" \
+                f"   - model.ini -> COUNTRY_PATH 的國家, 必須包含在預設 {args.standard}.ini 的國家"
+    elif stdVal.lower() == "atsc":
+        rules = f"2. NA 只有包含 ASTC 的國家\n" \
+                f"   - model.ini -> COUNTRY_PATH 的國家, 必須包含在預設 {args.standard}.ini 的國家"
+    elif stdVal.lower() == "isdb":
+        rules = f"2. BRA 只有包含 ISDB(不含 JP) 的國家\n" \
+                f"   - model.ini -> COUNTRY_PATH 的國家, 必須包含在預設 {args.standard}.ini 的國家"
 
     conditions = [
         f"Standard = {args.standard}",                                             # condition_1
         f"Country Path = {country_path if country_path else 'N/A'}",               # condition_2
         f"Target Countries = {', '.join(target_countries) if target_countries else 'N/A'}",  # condition_3
         f"Global Countries = {', '.join(global_countries) if global_countries else 'N/A'}",  # condition_4
-        f"Missing = {', '.join(missing) if missing else 'N/A'}",                   # condition_5
+        f"不包含在預設{args.standard}的國家 = {', '.join(missing) if missing else 'N/A'}",                   # condition_5
     ]
 
     res = {

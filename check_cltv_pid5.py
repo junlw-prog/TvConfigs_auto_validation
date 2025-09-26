@@ -248,7 +248,8 @@ def main():
     print(f"Result    : {result}")
 
     # 準備報表資料（符合新格式）
-    rules = f"3.可enable CLTV,也可不整合\n" \
+    rules = f"2. CLTV 包含全部制式的國家\n" \
+            f"3. 現階段只有 13 個國家 support CLTV APK\n" \
             f"    - model.ini -> LaunchCLTVByCountry 有無宣告?\n" \
             f"    - 宣告的檔案是否存在?"
     conditions = [

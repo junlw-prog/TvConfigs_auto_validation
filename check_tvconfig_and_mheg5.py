@@ -44,7 +44,7 @@ def export_report_row(model_ini: str, rules: str, passed: bool, conditions: List
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -78,6 +78,15 @@ def export_report_row(model_ini: str, rules: str, passed: bool, conditions: List
 
     ws.append(row)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if row[1] == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
 
     # 樣式
     total_cols = len(ws[1])
@@ -156,14 +165,14 @@ def check_tvconfig_path(tvconfig_value: Optional[str]) -> bool:
     return tvconfig_value in ALLOWED_TVCONFIG_VALUES
 
 def check_mheg5_flag(tvconfig_fs_path: Optional[str]) -> bool:
-    if not tvconfig_fs_path or not os.path.exists(tvconfig_fs_path):
-        return False
+    #if not tvconfig_fs_path or not os.path.exists(tvconfig_fs_path):
+        #return False
     txt = _read_text(tvconfig_fs_path)
-    pattern = r'^\s*persist\.vendor\.rtk\.tv\.enable_mheg5\s*=\s*true\s*$'
+    pattern = r'^\s*persist\.vendor\.rtk\.tv\.enable_mheg5\s*=\s*false\s*$'
     for line in txt.splitlines():
         if re.match(pattern, line):
             return True
-    return "persist.vendor.rtk.tv.enable_mheg5=true" in txt
+    return "persist.vendor.rtk.tv.enable_mheg5=false" in txt
 
 # -----------------------------
 # Main
@@ -202,33 +211,33 @@ def main():
     # 測項一：TvConfig 值是否為允許清單
     path_ok = check_tvconfig_path(tvconfig_value)
     rules_1 = (
-        "TvConfig value must be one of:\n"
-        "  /tvconfigs/tv_config/tv.config.dvb_ntsc\n"
-        "  /tvconfigs/tv_config/tv.config.dvbt_ntsc"
+        "4.Model ini:\n" 
+        "  公版 TvConfig = /tvconfigs/tv_config/tv.config.dvb_ntsc\n"
+        "  哥倫比亞 TvConfig = /tvconfigs/tv_config/tv.config.dvbt_ntsc\n"
     )
     conditions_1 = [
         f"TvConfig = {tvconfig_value or ''}",
-        f"File exists = {os.path.exists(tvconfig_fs_path) if tvconfig_fs_path else False}",
+        #f"File exists = {os.path.exists(tvconfig_fs_path) if tvconfig_fs_path else False}",
     ]
 
-    # 測項二：tvconfig 內容是否含 enable_mheg5=true
-    mheg5_ok = check_mheg5_flag(tvconfig_fs_path)
-    rules_2 = "tvconfig contains: persist.vendor.rtk.tv.enable_mheg5=true"
+    # 測項二：tvconfig 內容是否含 enable_mheg5=false
+    mheg5_is_false = check_mheg5_flag(tvconfig_fs_path)
+    rules_2 = "3.沒有mheg5,因為columbia and tawian沒有"
     conditions_2 = [
         f"TvConfig = {tvconfig_value or ''}",
-        f"File exists = {os.path.exists(tvconfig_fs_path) if tvconfig_fs_path else False}",
-        f"enable_mheg5=true found = {mheg5_ok}",
+        #f"File exists = {os.path.exists(tvconfig_fs_path) if tvconfig_fs_path else False}",
+        f"persist.vendor.rtk.tv.enable_mheg5={False if mheg5_is_false else True}",
     ]
 
     # console output
     print(f"[CHECK-1] TvConfig path allowed? -> {'PASS' if path_ok else 'FAIL'}")
-    print(f"[CHECK-2] enable_mheg5=true present? -> {'PASS' if mheg5_ok else 'FAIL'}")
+    print(f"[CHECK-2] enable_mheg5=true present? -> {'PASS' if mheg5_is_false else 'FAIL'}")
 
     # export report
     if args.report or args.report_xlsx:
         xlsx_path = args.report_xlsx if args.report_xlsx else "kipling.xlsx"
+        export_report_row(model_ini, rules_2, mheg5_is_false, conditions_2, xlsx_path)
         export_report_row(model_ini, rules_1, path_ok, conditions_1, xlsx_path)
-        export_report_row(model_ini, rules_2, mheg5_ok, conditions_2, xlsx_path)
         sheet = _sheet_name_for_model(model_ini)
         print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet}, +2 rows)")
 

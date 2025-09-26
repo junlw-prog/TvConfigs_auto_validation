@@ -46,7 +46,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -90,6 +90,15 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     row_values = [rules, result] + conditions
     ws.append(row_values)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
 
     # ── 統一樣式：所有欄位同寬 & 換行 & 垂直置頂（含表頭） ──
     total_cols = 2 + num_condition_cols
@@ -269,7 +278,7 @@ def check_ewbs(model_ini_path: str, root_dir: str = ".") -> dict:
         print("→ COUNTRY_PATH = N/A")
 
     # 準備報表資料
-    rules = "isSupportEWBS = true ?\nisSupportNeverEnterSTR is set ?\nisEwbsSettingOn is set ?\nScan COUNTRY_PATH for specific countries"
+    rules = f"9. EWBS 驗證 ( 國家要選菲律賓)\n    - isSupportEWBS = true ?\n    - isSupportNeverEnterSTR is set ?\n    - isEwbsSettingOn is set ?\n    - Scan COUNTRY_PATH for specific countries"
     conditions = [
         f"isSupportEWBS = {'true' if val_ewbs is True else ('false' if val_ewbs is False else 'N/A')}", # condition_1
         f"isSupportNeverEnterSTR = {'set' if never_str_line else 'N/A'}",                                # condition_2
