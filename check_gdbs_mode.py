@@ -28,7 +28,7 @@ def _ensure_openpyxl():
 def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols: int = 5) -> None:
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -56,7 +56,9 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         ws.append(headers)
 
     # 準備資料
-    rules    = "DV_GDBS_DELAY exist?\nGDBS_MODE=1?"
+    rules    = "9. GDBS 設定\n" \
+               "    - model.ini->DV_GDBS_DELAY ?\n" \
+               "    - PQ_Cfg,ini->GDBS_MODE=1"
     result   = "PASS" if res.get("passed", False) else "FAIL"
     dv_path  = _na(res.get("dv_gdbs_delay", ""))
     gdbs_mode = _na(res.get("gdbs_mode", ""))
@@ -69,6 +71,19 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     row_values = [rules, result] + conds
     ws.append(row_values)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if dv_path == "N/A":
+        ws.cell(row=last_row, column=3).fill = failed_color
+    if gdbs_mode == "N/A":
+        ws.cell(row=last_row, column=4).fill = failed_color
 
     total_cols = 2 + num_condition_cols
     for col_idx in range(1, total_cols + 1):

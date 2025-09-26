@@ -188,7 +188,7 @@ def build_rows(model_ini_path: str,
 
 def write_or_append_xlsx(xlsx_path: str, sheet: str, rows: List[List[str]]) -> None:
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     headers = ["Rules", "Result", "condition_1", "condition_2", "condition_3",

@@ -78,18 +78,32 @@ def export_report(res: Dict[str, str], xlsx_path: str = "kipling.xlsx", num_cond
     result   = "PASS" if res.get("passed", False) else "FAIL"
 
     conds = [
-        f"PQ_OSD = { _na(res.get('pq_osd', '')) }\nexists: {res.get('pq_osd_exists', 'N/A')}",
-        f"ICM = { _na(res.get('icm', '')) }\nexists: {res.get('icm_exists', 'N/A')}",
-        f"DBC = { _na(res.get('dbc', '')) }\nexists: {res.get('dbc_exists', 'N/A')}",
-        f"PQ_PANEL_COLOR = { _na(res.get('pq_panel_color', '')) }\nendswith .ini: {res.get('pq_panel_color_is_ini', 'N/A')}\nexists: {res.get('pq_panel_color_exists', 'N/A')}",
-        _na(res.get('summary', '')),
+        f"PQ_OSD = { _na(res.get('pq_osd', '')) }\n",
+        f"ICM = { _na(res.get('icm', '')) }\n",
+        f"DBC = { _na(res.get('dbc', '')) }\n",
+        f"PQ_PANEL_COLOR = { _na(res.get('pq_panel_color', '')) }\nfilename extension is .ini: {res.get('pq_panel_color_is_ini', 'N/A')}\n",
     ]
 
     row_values = [rules, result] + conds[:num_condition_cols]
     ws.append(row_values)
     last_row = ws.max_row
 
-
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if res.get('pq_osd_exists') == "N/A":
+        ws.cell(row=last_row, column=3).fill = failed_color
+    if res.get('icm_exists') == "N/A":
+        ws.cell(row=last_row, column=4).fill = failed_color
+    if res.get('dbc_exists') == "N/A":
+        ws.cell(row=last_row, column=5).fill = failed_color
+    if res["pq_panel_color"] == "":
+        ws.cell(row=last_row, column=6).fill = failed_color
 
     total_cols = 2 + num_condition_cols
     for col_idx in range(1, total_cols + 1):

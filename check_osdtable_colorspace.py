@@ -116,7 +116,7 @@ def to_abs_under_root(root: Path, candidate: str) -> Path:
 def append_report_row(xlsx_path: Path, sheet_name: str, row: Dict[str, str]) -> None:
     try:
         from openpyxl import Workbook, load_workbook
-        from openpyxl.styles import Alignment, Font
+        from openpyxl.styles import Alignment, Font, PatternFill
     except Exception as e:
         raise RuntimeError("需要 openpyxl 來輸出 xlsx，請先安裝: pip install openpyxl") from e
 
@@ -138,6 +138,20 @@ def append_report_row(xlsx_path: Path, sheet_name: str, row: Dict[str, str]) -> 
     ws = wb[sheet_name]
     values = [row.get(h, "N/A") for h in headers]
     ws.append(values)
+    last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if row["Result"] == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if row["condition_1"] == "[Dolby_Dark] ColorSpace = N/A":
+        ws.cell(row=last_row, column=3).fill = failed_color
+    if row["condition_2"] == "[Dolby_IQ]   ColorSpace = N/A":
+        ws.cell(row=last_row, column=4).fill = failed_color
 
     # 統一格式
     col_width = 38
@@ -207,7 +221,8 @@ def main():
 
     model_text = smart_read_text(model_ini)
     pq_osd_val = find_pq_osd_path_from_model(model_text)
-    rules = "Check [Dolby_Dark]/[Dolby_IQ] ColorSpace == 0"
+    rules = "9. 先確認 OSDTable.ini 使用的檔案是那一個\n" \
+            "    - 確認 所有的 Dolby_xxx 相關的區塊 ColorSpace 是否都有 off"
 
     if not pq_osd_val:
         if args.v:

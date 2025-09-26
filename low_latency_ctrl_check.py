@@ -45,7 +45,7 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80
@@ -73,19 +73,30 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         ws.append(headers)
 
     # 準備資料
-    rules = "In TvServIni → SUPPORT_LOW_LATENCY_CTRL=true"
+    rules = "7. Dias 注意預設是 low latency enable, 但送測 dolby vision 要把 low latency 預設 off\n" \
+            "    - TvServIni → SUPPORT_LOW_LATENCY_CTRL=true"
     result = "PASS" if res.get("passed") else "FAIL"
 
     conds = [
-        f"TvServIni = {_na(res.get('tvserv_ini_path'))}",
         f"SUPPORT_LOW_LATENCY_CTRL = {_na(res.get('vals', {}).get('SUPPORT_LOW_LATENCY_CTRL'))}",
-        _na("; ".join(res.get("notes", []))),
+        #f"TvServIni = {_na(res.get('tvserv_ini_path'))}",
+        #_na("; ".join(res.get("notes", []))),
     ]
     # 對齊欄位數
     #conds = (conds + ["N/A"] * num_condition_cols)[:num_condition_cols]
 
     ws.append([rules, result] + conds)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+
 
     # 欄寬/置頂/換行
     total_cols = 2 + num_condition_cols

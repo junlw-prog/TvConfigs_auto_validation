@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 
@@ -214,12 +214,14 @@ def export_report(res: Dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         headers = ["Rules", "Result"] + [f"condition_{i}" for i in range(1, num_condition_cols + 1)]
         ws.append(headers)
 
-    rules = "inputSource has 'DVBS:NULL'?\nFor each DVB/DVB_* in countryTvSysMap.xml → tv.config has 'persist.vendor.rtk.tv.dtv_satellite=0'?"
+    rules = "2. Disable DVB C/S/S2\n" \
+            "  1) model.ini->inputSource->DVBS:NULL\n" \
+            "  2) countryTvSysMap.xml→tv.config.*→persist.vendor.rtk.tv.dtv_satellite=0"
     result = "PASS" if res.get("passed", False) else "FAIL"
 
     conds = [
-        f"model.ini = {res.get('model_ini') or 'N/A'}",
-        f"TvSysMap XML = {res.get('xml_path') or 'N/A'}",
+        #f"model.ini = {res.get('model_ini') or 'N/A'}",
+        #f"TvSysMap XML = {res.get('xml_path') or 'N/A'}",
         f"InputSource check = {res.get('input_source_check') or 'N/A'}",
         f"DVB tv.config checked = {res.get('checked_count', 0)}",
         f"Failures (count) = {res.get('failed_count', 0)}",
@@ -229,6 +231,19 @@ def export_report(res: Dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
 
     ws.append([rules, result] + conds)
     last_row = ws.max_row
+
+    # 給儲存格指派上色
+    rules_color = PatternFill(start_color="DAEEF3", end_color="DAEEF3", fill_type="solid")
+    failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
+    # 上色
+    first_cell = ws.cell(row=last_row, column=1)  # 欄位1對應的是 'A' 列
+    first_cell.fill = rules_color
+    if result == "FAIL":
+        ws.cell(row=last_row, column=2).fill = failed_color
+    if res['input_source_check'] == "":
+        ws.cell(row=last_row, column=3).fill = failed_color
+    if res['failed_files'] != "N/A" or []:
+        ws.cell(row=last_row, column=6).fill = failed_color
 
     total_cols = 2 + num_condition_cols
     for col_idx in range(1, total_cols + 1):
