@@ -17,7 +17,8 @@ Both must match (string compare after stripping) to PASS.
 import argparse
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any
 
 # -----------------------------
 # Report helpers (style aligned with tv_multi_standard_validation.py and pic_mode_test.py)
@@ -235,6 +236,66 @@ def evaluate(vals: Dict[str, str]) -> Tuple[bool, List[str]]:
                 notes.append(f"{k} 不符 (expect {expect}, got {actual})")
                 passed = False
     return passed, notes
+
+# --- Orchestrator/Programmatic entrypoint ------------------------------------
+
+def run(
+    model_ini: str,
+    root: str = ".",
+    standard: Optional[str] = None,
+    verbose: bool = False,
+    conditions: str = "",
+    report_xlsx: Optional[str] = None,
+    ctx: Any = None,
+    **kwargs,                         # 吸收多餘參數避免 TypeError
+) -> Dict[str, Any]:
+
+    if not os.path.exists(model_ini):
+        raise SystemExit(f"[ERROR] model ini not found: {model_ini}")
+
+    root = os.path.abspath(os.path.normpath(root))
+    if verbose:
+        print(f"[INFO] model_ini: {model_ini}")
+        print(f"[INFO] root     : {root}")
+
+    # 1) 取 TvDefaultSettingsPath
+    tvDefaultSettings_path = parse_model_ini_for_TvDefaultSettings(model_ini, root)
+    if verbose:
+        print(f"[INFO] TvDefaultSettingsPath : {tvDefaultSettings_path or '(not found in model.ini)'}")
+
+    vals: Dict[str, str] = {}
+    notes: List[str] = []
+
+    if not tvDefaultSettings_path:
+        notes.append("model.ini 未找到 TvDefaultSettingsPath")
+        passed = False
+    elif not os.path.exists(tvDefaultSettings_path):
+        notes.append(f"TvDefaultSettingsPath 指向檔案不存在: {tvDefaultSettings_path}")
+        passed = False
+    else:
+        # 2) 解析 TvDefaultSettings_ini，抽出 AI/AIPQ
+        vals = parse_TvDefaultSettings_ai_flags(tvDefaultSettings_path)
+        passed, more = evaluate(vals)
+        notes.extend(more)
+
+    # Console 輸出（僅 PASS/FAIL）
+    print(f"Result  : {'PASS' if passed else 'FAIL'}")
+
+    xlsx_path = report_xlsx
+    # 3) 報表
+    res = {
+        "passed": passed,
+        "model_ini": model_ini,
+        "TvDefaultSettings_ini_path": os.path.relpath(tvDefaultSettings_path, root) or "",
+        "vals": vals,
+        "notes": notes,
+    }
+    out_xlsx = f"{xlsx_path}.xlsx"
+    export_report(res, out_xlsx)
+    sheet = _sheet_name_for_model(model_ini)
+    print(f"[INFO] Report appended to: {xlsx_path} (sheet: {sheet})")
+    return []
+
 
 # -----------------------------
 # Main

@@ -15,7 +15,7 @@ check_EWBS.py
 import argparse
 import os
 import re
-from typing import Optional, List
+from typing import Optional, List, Any, Dict
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Report helpers (aligned with tv_multi_standard_validation.py)
@@ -294,6 +294,24 @@ def check_ewbs(model_ini_path: str, root_dir: str = ".") -> dict:
         "conditions": conditions,
     }
 
+def run(
+    model_ini: str,
+    root: str = ".",
+    standard: Optional[str] = None,
+    verbose: bool = False,
+    conditions: str = "",
+    report_xlsx: Optional[str] = None,
+    ctx: Any = None,
+    **kwargs,                         # 吸收多餘參數避免 TypeError
+) -> Dict[str, Any]:
+    res = check_ewbs(model_ini, root)
+
+    # 報表輸出
+    if report_xlsx:
+        out_xlsx = f"{report_xlsx}.xlsx" if not report_xlsx.endswith(".xlsx") else report_xlsx
+        export_report(res, xlsx_path=out_xlsx, num_condition_cols=conditions)
+        sheet = _sheet_name_for_model(res.get("model_ini", ""))
+        print(f"[INFO] Report appended to: {out_xlsx} (sheet: {sheet})")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI

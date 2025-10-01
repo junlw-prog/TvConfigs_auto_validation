@@ -17,7 +17,7 @@ check_cltv.py
 import argparse
 import os
 import re
-from typing import Optional
+from typing import Optional, Any, Dict
 
 # -----------------------------
 # Utilities for report
@@ -194,6 +194,83 @@ def parse_model_ini_for_launch_cltv(model_ini_path: str) -> Optional[str]:
             return ""
     return None
 
+def run(
+    model_ini: str,
+    root: str = ".",
+    standard: Optional[str] = None,
+    verbose: bool = False,
+    conditions: str = "",
+    report_xlsx: Optional[str] = None,
+    ctx: Any = None,
+    **kwargs,                         # 吸收多餘參數避免 TypeError
+) -> Dict[str, Any]:
+
+    if not os.path.exists(model_ini):
+        raise SystemExit(f"[ERROR] model ini not found: {model_ini}")
+
+    root = os.path.abspath(os.path.normpath(root))
+
+    if verbose:
+        print(f"[INFO] model_ini: {model_ini}")
+        print(f"[INFO] root     : {root}")
+
+    # 1) 擷取設定值
+    raw_value = parse_model_ini_for_launch_cltv(model_ini)
+
+    if raw_value is None:
+        if verbose:
+            print("[INFO] LaunchCLTVByCountry 未宣告（或只有註解）→ N/A")
+        result = "N/A"
+        resolved = ""
+        exists_text = "N/A"
+    else:
+        if raw_value == "":
+            if verbose:
+                print("[WARN] LaunchCLTVByCountry 格式錯誤或值為空 → FAIL")
+            result = "FAIL"
+            resolved = ""
+            exists_text = "N/A"
+        else:
+            # 2) 映射到實際路徑
+            resolved = _resolve_tvconfigs_path(root, raw_value)
+            # 3) 檢查檔案存在
+            exists = os.path.exists(resolved)
+            exists_text = "Yes" if exists else "No"
+            result = "PASS" if exists else "FAIL"
+
+    # 螢幕輸出（比對步驟）
+    print("=== LaunchCLTVByCountry Check ===")
+    print(f"Model.ini : {model_ini}")
+    print(f"Setting   : {raw_value if raw_value is not None else 'N/A'}")
+    print(f"Resolved  : {resolved if resolved else 'N/A'}")
+    print(f"Exists?   : {exists_text}")
+    print(f"Result    : {result}")
+
+    # 準備報表資料（符合新格式）
+    rules = f"2. CLTV 包含全部制式的國家\n" \
+            f"3. 現階段只有 13 個國家 support CLTV APK\n" \
+            f"    - model.ini -> LaunchCLTVByCountry 有無宣告?\n" \
+            f"    - 宣告的檔案是否存在?"
+    conditions = [
+        f'LaunchCLTVByCountry = {raw_value if raw_value is not None and raw_value != "" else "N/A"}',  # condition_1
+        f"File Exists = {exists_text}",                                                                # condition_2
+    ]
+
+    # 這裡決定要輸出幾個 condition_* 欄位：
+    #ncols = max(num_conditions, len(conditions))
+
+    res = {
+        "result": result,       # PASS / FAIL / N/A
+        "rules": rules,         # Rules 欄位內容
+        "model_ini": model_ini, # 用於決定分頁（PID_1..others），不會直接輸出欄位
+        "conditions": conditions,
+    }
+
+    # 報表輸出
+    if report_xlsx:
+        out_xlsx = f"{report_xlsx}.xlsx" if not report_xlsx.endswith(".xlsx") else report_xlsx
+        export_report(res, xlsx_path=out_xlsx, num_condition_cols=max(1, len(conditions)))
+        print(f"[INFO] Report appended to: {out_xlsx} (sheet: {_sheet_name_for_model(model_ini)})")
 
 def main():
     parser = argparse.ArgumentParser(description="Check LaunchCLTVByCountry in model.ini and export report (tv_multi_standard_validation.py style).")
@@ -254,7 +331,6 @@ def main():
             f"    - 宣告的檔案是否存在?"
     conditions = [
         f'LaunchCLTVByCountry = {raw_value if raw_value is not None and raw_value != "" else "N/A"}',  # condition_1
-        #f"Resolved Path = {resolved if resolved else 'N/A'}",                                          # condition_2
         f"File Exists = {exists_text}",                                                                # condition_3
         # 如需加入更多資訊，可在此繼續擴充 condition_4, condition_5, ...
     ]

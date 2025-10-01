@@ -25,7 +25,7 @@ import sys
 # Excel dependencies are optional. Only required if --report-xlsx is provided.
 try:
     import openpyxl
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
 except Exception:
     openpyxl = None
 

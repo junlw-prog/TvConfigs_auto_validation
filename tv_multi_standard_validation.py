@@ -43,7 +43,7 @@ def export_report(res: dict, xlsx_path: str, sheet_name: str,  num_condition_col
     """
     _ensure_openpyxl()
     from openpyxl import Workbook, load_workbook
-    from openpyxl.styles import Alignment, Font
+    from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     COMMON_WIDTH = 80

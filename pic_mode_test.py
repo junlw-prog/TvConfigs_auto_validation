@@ -4,7 +4,7 @@
 import argparse
 import os
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 # -----------------------------
 # Report helpers (style aligned with tv_multi_standard_validation.py)
@@ -72,7 +72,6 @@ def export_report(res: dict, xlsx_path: str = "kipling.xlsx", num_condition_cols
         f"DEFAULT_PICTURE_MODE = {_na(res.get('vals', {}).get('DEFAULT_PICTURE_MODE'))}",
         f"DEFAULT_DOLBY_PICTURE_MODE = {_na(res.get('vals', {}).get('DEFAULT_DOLBY_PICTURE_MODE'))}",
         f"SUPPORT_DOLBY_CERT = {_na(res.get('vals', {}).get('SUPPORT_DOLBY_CERT'))}",
-        #_na("; ".join(res.get("notes", []))),
     ][:num_condition_cols]
 
     ws.append([rules, result] + conds)
@@ -227,6 +226,59 @@ def evaluate(vals: Dict[str, str]) -> Tuple[bool, List[str]]:
                 notes.append(f"{k} 不符 (expect {expect}, got {actual})")
                 passed = False
     return passed, notes
+
+def run(
+    model_ini: str,
+    root: str = ".",
+    standard: Optional[str] = None,
+    verbose: bool = False,
+    conditions: str = "",
+    report_xlsx: Optional[str] = None,
+    ctx: Any = None,
+    **kwargs,                         # 吸收多餘參數避免 TypeError
+) -> Dict[str, Any]:
+    #root = os.path.abspath(os.path.normpath(args.root))
+    if verbose:
+        print(f"[INFO] model_ini: {model_ini}")
+        print(f"[INFO] root     : {root}")
+
+    # 1) 取 TvServIni
+    tvserv_path = parse_model_ini_for_tvserv(model_ini, root)
+    if verbose:
+        print(f"[INFO] TvServIni : {tvserv_path or '(not found in model.ini)'}")
+
+    vals: Dict[str, str] = {}
+    notes: List[str] = []
+
+    if not tvserv_path:
+        notes.append("model.ini 未找到 TvServIni")
+        passed = False
+    elif not os.path.exists(tvserv_path):
+        notes.append(f"TvServIni 指向檔案不存在: {tvserv_path}")
+        passed = False
+    else:
+        # 2) 解析 tvserv_ini，抽出三個鍵
+        vals = parse_tvserv_kv(tvserv_path)
+        passed, more = evaluate(vals)
+        notes.extend(more)
+
+    # Console 輸出（僅 PASS/FAIL）
+    print(f"Result  : {'PASS' if passed else 'FAIL'}")
+
+    # 3) 報表
+    res = {
+        "passed": passed,
+        "model_ini": model_ini,
+        "tvserv_ini_path": tvserv_path or "",
+        "vals": vals,
+        "notes": notes,
+    }
+
+    if report_xlsx:
+        out_xlsx = f"{report_xlsx}.xlsx" if not report_xlsx.endswith(".xlsx") else report_xlsx
+        #export_report(res, xlsx_path=out_xlsx, num_condition_cols=max(1, len(conditions)))
+        export_report(res, xlsx_path=out_xlsx, num_condition_cols=max(4, len(conditions.split(",")) if conditions else 4),)
+        print(f"[INFO] Report appended to: {out_xlsx} (sheet: {_sheet_name_for_model(model_ini)})")
 
 # -----------------------------
 # Main

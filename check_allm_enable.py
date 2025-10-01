@@ -247,7 +247,7 @@ def export_report(res1: Dict[str, object], res2: Dict[str, object], xlsx_path: s
     """
     try:
         from openpyxl import Workbook, load_workbook
-        from openpyxl.styles import Alignment, Font
+        from openpyxl.styles import Alignment, Font, PatternFill
         from openpyxl.utils import get_column_letter
     except ImportError as e:
         raise SystemExit(

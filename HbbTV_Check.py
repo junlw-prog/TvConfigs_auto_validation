@@ -4,7 +4,7 @@ import re
 from typing import Dict, List, Tuple, Optional
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 
 # Import sheet naming rule from the reference checker
 try:

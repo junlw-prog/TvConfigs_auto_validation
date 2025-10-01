@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Dict, List, Optional, Tuple
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 # 檢查的 key 改成 Ginga

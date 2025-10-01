@@ -4,7 +4,7 @@
 import argparse
 import os
 import re
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 
 
 # -----------------------------
@@ -73,9 +73,14 @@ def export_report(res: dict, xlsx_path: str, sheet_name: str,  num_condition_col
     failed_color = PatternFill(start_color="FDE9D9", end_color="FDE9D9", fill_type="solid")
 
     # 準備資料
-    rules    = f"6. 要 enable 多制式切換\n" \
-               f"    - model.ini->COUNTRY_PATH是否宣告?\n" \
-               f"    - model.ini->tvSysMap是否宣告?"
+    if sheet_name == "PID_5":
+        rules    = f"6. 多制式切換可選擇開或是關\n" \
+                   f"    - model.ini->COUNTRY_PATH是否宣告?\n" \
+                   f"    - model.ini->tvSysMap是否宣告?"
+    else:
+        rules    = f"4. 多制式切換可選擇開或是關\n" \
+                   f"    - model.ini->COUNTRY_PATH是否宣告?\n" \
+                   f"    - model.ini->tvSysMap是否宣告?"
     result   = "PASS" if res.get("passed", False) else "FAIL"
     standard = _na(res.get("standard", ""))
     tvsysmap = _na(res.get("tv_sys_map", ""))
@@ -253,6 +258,52 @@ def build_result(args, model_ini: str, tvsysmap: Optional[str], country_path: Op
         "customer_target_countries": targets,
         "missing": missing,
     }
+
+
+def run(
+    model_ini: str,
+    root: str = ".",
+    standard: Optional[str] = None,
+    verbose: bool = False,
+    conditions: str = "",
+    report_xlsx: Optional[str] = None,
+    ctx: Any = None,
+    **kwargs,                         # 吸收多餘參數避免 TypeError
+) -> Dict[str, Any]:
+
+    root = os.path.abspath(os.path.normpath(root))
+
+    if verbose:
+        print(f"[INFO] model_ini: {model_ini}")
+        print(f"[INFO] root     : {root}")
+        print(f"[INFO] standard : {standard or ''}")
+
+    # 解析 model.ini -> tvSysMap 與 COUNTRY_PATH
+    tvsysmap_path, country_path = parse_model_ini_for_paths(model_ini, root)
+    if verbose:
+        print(f"[INFO] tvSysMap     : {tvsysmap_path or '(not found in model.ini)'}")
+        print(f"[INFO] COUNTRY_PATH : {country_path or '(not found in model.ini)'}")
+
+    # 擷取國家清單（寬鬆解析）
+    targets = parse_country_list(country_path) if country_path else []
+    if verbose:
+        print(f"[INFO] Target Countries: {', '.join(targets) if targets else '(none)'}")
+
+    # 產生結果
+    args = Optional[str]
+    args.standard = standard
+    res = build_result(args, model_ini, tvsysmap_path, country_path, targets)
+
+    # 簡單輸出到 console
+    print(f"Standard: {res['standard']}")
+    print(f"Result  : {'PASS' if res['passed'] else 'FAIL'}")
+
+    # 報表輸出
+    if report_xlsx:
+        out_xlsx = f"{report_xlsx}.xlsx" if not report_xlsx.endswith(".xlsx") else report_xlsx
+        sheet_name = _sheet_name_for_model(model_ini)
+        export_report(res, out_xlsx, sheet_name)
+        print(f"[INFO] Report appended to: {out_xlsx} (sheet: {sheet_name})")
 
 
 # -----------------------------

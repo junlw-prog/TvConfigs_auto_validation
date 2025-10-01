@@ -17,7 +17,7 @@ Usage:
 import argparse
 import os
 import re
-from typing import Optional, Dict, Tuple, List
+from typing import Optional, Dict, Tuple, List, Any
 
 def _sheet_name_for_model(model_ini_path: str) -> str:
     """
@@ -178,6 +178,31 @@ def export_simple_report(res: Dict[str, object], xlsx_path: str, sheet_name: str
             pass
 
     wb.save(xlsx_path)
+
+def run(
+    model_ini: str,
+    root: str = ".",
+    standard: Optional[str] = None,
+    verbose: bool = False,
+    conditions: str = "",
+    report_xlsx: Optional[str] = None,
+    ctx: Any = None,
+    **kwargs,          # 吸收多餘參數避免 TypeError
+) -> Dict[str, Any]:
+
+    if not os.path.exists(model_ini):
+        raise SystemExit(f"[ERROR] model ini not found: {model_ini}")
+
+    res = check_is_show_setupwizard(model_ini)
+
+    print(f"[CHECK] isShowSetupwizard = {res['value'] or 'N/A'}")
+    print(f"Result : {'PASS' if res['passed'] else 'FAIL'}")
+    sheet_name = _sheet_name_for_model(model_ini)
+
+    out_xlsx = f"{report_xlsx}.xlsx"
+    export_simple_report(res, out_xlsx, sheet_name)
+    print(f"[INFO] Report appended to: {report_xlsx}")
+    return []
 
 
 # -----------------------------
